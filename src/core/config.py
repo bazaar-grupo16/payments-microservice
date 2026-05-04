@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     """Centralised configuration for the microservice."""
 
     # ── Application ──────────────────────────────────
-    APP_NAME: str = "template-service"
+    APP_NAME: str = "payments-service"
     LOG_LEVEL: str = "info"
 
     # ── Database ─────────────────────────────────────
@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     DB_USER: str
     DB_PASSWORD: str
     DB_NAME: str
+
+    # ── MercadoPago ──────────────────────────────────
+    MP_ACCESS_TOKEN: str
+    MP_WEBHOOK_SECRET: str
+
+    # ── Internal Services ────────────────────────────
+    ORDERS_SERVICE_URL: str
 
     # ── Pydantic-settings config ─────────────────────
     model_config = SettingsConfigDict(

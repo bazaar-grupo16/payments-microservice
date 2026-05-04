@@ -181,3 +181,5 @@ $RECYCLE.BIN/
 *.orig
 *.patch
 node_modules/
+.agents
+.plan.md

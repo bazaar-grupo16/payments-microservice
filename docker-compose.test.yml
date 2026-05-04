@@ -30,6 +30,11 @@ services:
       DB_USER: test_user
       DB_PASSWORD: test_password
       DB_NAME: test_db
+      # ── MercadoPago (dummy values for tests) ──────
+      MP_ACCESS_TOKEN: TEST-0000000000000000-000000-00000000000000000000000000000000-000000000
+      MP_WEBHOOK_SECRET: test_webhook_secret
+      # ── Internal Services (dummy for tests) ───────
+      ORDERS_SERVICE_URL: http://orders-service:8000
     depends_on:
       db:
         condition: service_healthy
