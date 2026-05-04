@@ -1,0 +1,35 @@
+# ──────────────────────────────────────────────────────────────
+# Docker Compose — Test environment
+#
+# Spins up a real PostgreSQL instance and runs pytest against it.
+# Usage:  docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+# ──────────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: test_db
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d test_db"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: test_user
+      DB_PASSWORD: test_password
+      DB_NAME: test_db
+    depends_on:
+      db:
+        condition: service_healthy

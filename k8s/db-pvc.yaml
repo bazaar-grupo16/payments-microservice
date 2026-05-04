@@ -1,0 +1,17 @@
+# ──────────────────────────────────────────────────────────────
+# PersistentVolumeClaim — Bazaar PostgreSQL Database
+# ──────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bazaar-db-pvc
+  labels:
+    app: bazaar-db
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Mi
+  # storageClassName: standard  # Uncomment and set to match your cluster's StorageClass.
+  #                              # Leave commented to use the cluster default.

@@ -1,0 +1,74 @@
+# ──────────────────────────────────────────────────────────────
+# Kubernetes Deployment — Bazaar Microservice
+# ──────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: template-service
+  labels:
+    app: template-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: template-service
+  template:
+    metadata:
+      labels:
+        app: template-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-login-secret
+      containers:
+        - name: template-service
+          image: $IMAGE_NAME:$IMAGE_TAG
+          ports:
+            - containerPort: 8000
+          # ── Environment from Kubernetes Secret ──────
+          env:
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_PORT
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_NAME
+          # ── Probes ─────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          # ── Resources ──────────────────────────────
+          resources:
+            # requests:
+            #   cpu: 100m
+            #   memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

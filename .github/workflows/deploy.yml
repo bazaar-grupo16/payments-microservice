@@ -1,0 +1,132 @@
+# ──────────────────────────────────────────────────────────────
+# CI/CD Pipeline — Bazaar Microservice
+# ──────────────────────────────────────────────────────────────
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Dockerfile"
+      - "Dockerfile.test"
+      - "docker-compose.test.yml"
+      - "k8s/**"
+      - "requirements.txt"
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ── 1. Lint ────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Lint with Ruff
+        run: ruff check src/ tests/
+
+  # ── 2. Test ─────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Bandit (SAST)
+        run: pip install bandit
+
+      - name: Run Security Check
+        run: bandit -r src/ -ll
+
+      - name: Run tests via docker compose
+        run: |
+          docker compose -f docker-compose.test.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from test-runner
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+  # ── 3. Build & Push Docker image ───────────────────
+  #  build:
+  #    name: Build & Push
+  #    needs: [lint, test]
+  #    runs-on: ubuntu-latest
+  #    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+  #
+  #    steps:
+  #      - uses: actions/checkout@v4
+  #
+  #      - name: Log in to GHCR
+  #        uses: docker/login-action@v3
+  #        with:
+  #          registry: ghcr.io
+  #          username: ${{ github.actor }}
+  #          password: ${{ secrets.GITHUB_TOKEN }}
+  #
+  #      - name: Build and push
+  #        uses: docker/build-push-action@v5
+  #        with:
+  #          context: .
+  #          push: true
+  #          tags: |
+  #            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+  #            ${{ env.IMAGE_NAME }}:latest
+
+  # ── 4. Deploy to Kubernetes (optional) ─────────────
+  # Uncomment the job below to enable automatic deployment
+  # to a DigitalOcean Kubernetes cluster.
+
+  
+  #  deploy:
+  #    name: Deploy to K8s
+  #    needs: build
+  #    runs-on: ubuntu-latest
+  #    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+  #  
+  #    steps:
+  #      - uses: actions/checkout@v4
+  #
+  #      - name: Install doctl
+  #        uses: digitalocean/action-doctl@v2
+  #        with:
+  #          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+  #
+  #      - name: Configure kubectl
+  #        run: doctl kubernetes cluster kubeconfig save e6683ee9-809c-4ab1-a965-bc55aba1ec4a
+  #  
+  #      - name: Update Kubernetes manifests and deploy
+  #        env:
+  #          IMAGE_TAG: ${{ github.sha }}
+  #          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+  #          DB_USER: ${{ secrets.DB_USER }}
+  #          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+  #          DB_NAME: ${{ secrets.DB_NAME }}
+  #        run: |
+  #          sudo apt-get install -y gettext-base
+  #          for f in k8s/*.yaml; do
+  #            envsubst '${IMAGE_NAME} ${IMAGE_TAG} ${DB_USER} ${DB_PASSWORD} ${DB_NAME}' \
+  #              < "$f" | kubectl apply -f - -n bazaar-dev
+  #          done

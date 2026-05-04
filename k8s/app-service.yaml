@@ -1,0 +1,17 @@
+# ──────────────────────────────────────────────────────────────
+# Kubernetes Service — Bazaar Microservice
+# ──────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: template-service
+  labels:
+    app: template-service
+spec:
+  type: ClusterIP
+  selector:
+    app: template-service
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000

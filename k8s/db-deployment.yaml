@@ -1,0 +1,76 @@
+# ──────────────────────────────────────────────────────────────
+# Kubernetes Deployment — Bazaar PostgreSQL Database
+# ──────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bazaar-db
+  labels:
+    app: bazaar-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bazaar-db
+  template:
+    metadata:
+      labels:
+        app: bazaar-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          # ── Environment from Kubernetes Secret ──────
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: bazaar-db-credentials
+                  key: DB_NAME
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # ── Probes ─────────────────────────────────
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # ── Resources ──────────────────────────────
+          resources:
+            # requests:
+            #   cpu: 100m
+            #   memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # ── Persistent Storage ──────────────────────
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: bazaar-db-pvc

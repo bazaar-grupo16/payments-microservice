@@ -1,0 +1,17 @@
+# ──────────────────────────────────────────────────────────────
+# Kubernetes Service — Bazaar PostgreSQL Database
+# ──────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: bazaar-db
+  labels:
+    app: bazaar-db
+spec:
+  type: ClusterIP
+  selector:
+    app: bazaar-db
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
