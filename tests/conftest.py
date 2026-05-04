@@ -6,13 +6,14 @@ Tests run against a **real PostgreSQL** database provided by
 same environment variables the application uses in production
 (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME).
 
-**No mocking is used.**
+**Database is NOT mocked.**
 """
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
-from src.core.database import Base, engine
+from src.core.database import Base, SessionLocal, engine
 from src.main import app
 
 
@@ -28,3 +29,22 @@ def _setup_database():
 def client() -> TestClient:
     """Return a ``TestClient`` bound to the FastAPI application."""
     return TestClient(app)
+
+
+@pytest.fixture()
+def db_session() -> Session:
+    """Yield a SQLAlchemy session and roll back after each test.
+
+    This ensures every test starts with a clean database state
+    without paying the cost of DROP/CREATE on every test.
+    """
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        # Truncate all tables to keep tests isolated.
+        for table in reversed(Base.metadata.sorted_tables):
+            session.execute(table.delete())
+        session.commit()
+        session.close()
