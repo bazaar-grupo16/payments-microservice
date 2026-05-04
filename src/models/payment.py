@@ -13,11 +13,10 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
-    Integer,
     Numeric,
     String,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID
 
 from src.core.database import Base
 from src.core.utils import utc_now
@@ -61,9 +60,8 @@ class Payment(Base):
         nullable=False,
         default=PaymentStatus.PENDING,
     )
-    amount = Column(Numeric(12, 2), nullable=False)
-    title = Column(String(255), nullable=False)
-    quantity = Column(Integer, nullable=False)
+    amount = Column(Numeric(12, 2), nullable=True)
+    items = Column(JSON, nullable=True)
 
     # ── Timestamps ───────────────────────────────────
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)

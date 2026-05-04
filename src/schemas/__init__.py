@@ -2,6 +2,7 @@
 
 from src.schemas.payment import (  # noqa: F401
     ErrorResponse,
+    Item,
     PaymentStatusResponse,
     PreferenceRequest,
     PreferenceResponse,

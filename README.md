@@ -1,200 +1,77 @@
-# Bazaar — Microservice Template
+# 💳 Payments Microservice - Bazaar
 
-Template base para microservicios Python / FastAPI del ecosistema **Bazaar**.
+Este microservicio se encarga de gestionar de forma centralizada la integración de pagos del e-commerce **Bazaar** con **MercadoPago Checkout Pro**.
 
-## Stack
+---
 
-| Capa | Tecnología |
-|------|-----------|
-| Backend | Python 3.11+, FastAPI, Pydantic, SQLAlchemy |
-| Base de datos | PostgreSQL (configurable por env vars) |
-| Contenedor | Docker (multi-stage, non-root) |
-| Orquestación | Kubernetes (DigitalOcean) |
-| CI/CD | GitHub Actions → GHCR → DOKS |
+## 🔄 Flujo de Integración (La Saga)
 
-## Estructura del proyecto
+El proceso de compra en Bazaar sigue un patrón de Saga. A continuación se explican dos escenarios principales:
 
-```
-├── src/
-│   ├── api/
-│   │   ├── controllers/    # Lógica de manejo de requests
-│   │   ├── routers/        # Definición de rutas FastAPI
-│   │   └── health.py       # /livez y /readyz
-│   ├── core/           # Configuración, DB, logging
-│   │   ├── config.py
-│   │   ├── database.py  # Engine, sesión, base, y retry de conexión
-│   │   ├── dependencies.py
-│   │   ├── logging.py
-│   │   └── utils.py    # Utilidades compartidas
-│   ├── exceptions/     # Tipos de excepción de dominio
-│   ├── models/         # Entidades SQLAlchemy
-│   ├── repositories/   # Acceso a datos
-│   ├── schemas/        # Modelos Pydantic
-│   ├── services/       # Lógica de negocio
-│   └── main.py         # Punto de entrada
-├── tests/
-│   ├── conftest.py
-│   └── test_health.py
-├── scripts/
-│   ├── run_tests.sh    # Wrapper para correr tests (Linux/macOS)
-│   └── run_tests.ps1   # Wrapper para correr tests (Windows)
-├── k8s/
-│   ├── app-deployment.yaml   # Deployment del microservicio
-│   ├── app-service.yaml      # Service (ClusterIP) del microservicio
-│   ├── db-deployment.yaml    # Deployment de PostgreSQL
-│   ├── db-service.yaml       # Service (ClusterIP) de PostgreSQL
-│   ├── db-pvc.yaml           # PersistentVolumeClaim para la BD
-│   └── secret.yaml           # ⚠️ Template — NO commitear valores reales
-├── .github/workflows/
-│   ├── ci-dev.yml      # Pipeline CI para la rama dev (lint, SAST, test)
-│   └── deploy.yml
-├── Dockerfile              # Imagen de producción
-├── Dockerfile.test         # Imagen para correr tests
-├── docker-compose.test.yml # Levanta PostgreSQL + test runner
-├── requirements.txt
-└── .env.example
-```
+### 🟢 Happy Path (Flujo Exitoso)
 
-## Setup local
+1. **Creación de la Orden:** El usuario finaliza su carrito. El backend central crea la `Order` y solicita a Pagos la generación del link de cobro invocando `POST /payments/preferences`.
+2. **Registro y Preferencia:**
+   - El servicio de Pagos verifica que la `Idempotency-Key` no exista.
+   - Crea un registro `Payment` en la base de datos local con status `PENDING`.
+   - Llama a la API de MercadoPago (`POST /checkout/preferences`) para generar el link de pago (`init_point`).
+   - Retorna el `init_point` al frontend (React Native).
+3. **Pago del Usuario:** El usuario abre el `init_point`, completa los datos de su tarjeta y MercadoPago aprueba el pago.
+4. **Notificación Webhook:** MercadoPago dispara un Webhook a `POST /payments/mp-webhook`.
+   - Pagos verifica la firma criptográfica (HMAC-SHA256) usando `x-signature` y su `MP_WEBHOOK_SECRET`.
+   - Pagos consulta a MercadoPago por el estado real del pago para evitar suplantaciones de identidad (vía `GET /v1/payments/{id}`).
+   - Al confirmar el estado `APPROVED`, actualiza el `Payment` en su base de datos.
+5. **Cierre de la Saga:** Pagos notifica al servicio de Órdenes (`POST /orders/{id}/payment-webhook`) para que este libere el pedido y comience la logística. El flujo culmina exitosamente.
 
-```bash
-# 1. Clonar y entrar al directorio
-git clone <REPO_URL> && cd template-microservice
+### 🔴 Unhappy Path (Fallo en la Notificación a Órdenes)
 
-# 2. Crear entorno virtual
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # macOS/Linux
+El usuario completa el flujo y paga correctamente, pero **el servicio de Órdenes está caído** en el momento en que se recibe el webhook.
 
-# 3. Instalar dependencias
-pip install -r requirements.txt
+1. MP dispara el Webhook a `POST /mp-webhook`.
+2. Pagos valida la firma, verifica que está `APPROVED` y actualiza su base de datos. El pago ya es válido localmente.
+3. **Fallo:** Pagos intenta notificar a Órdenes mediante `POST /orders/{id}/payment-webhook` y recibe un error `503 Service Unavailable` o un *Timeout*.
+4. **Resiliencia (Retry Backoff):** En lugar de fallar inmediatamente, el cliente interno de órdenes reintenta la petición:
+   - Espera `0.5s` y reintenta. Si falla:
+   - Espera `1.0s` y reintenta. Si falla:
+   - Espera `2.0s` y reintenta.
+5. Si tras 3 intentos el servicio de Órdenes sigue caído, el webhook finaliza retornando `200 OK` a MercadoPago (ya que el pago *sí* se procesó financieramente) pero la orden queda desincronizada temporalmente.
+   - *Nota de diseño:* Para sistemas de producción, este fallo permanente debería emitir una métrica/alerta y registrarse en una "Dead Letter Queue" para que un cronjob posterior concilie las órdenes que están pagadas pero que el MS de órdenes aún considera pendientes.
 
-# 4. Configurar variables de entorno
-cp .env.example .env
-# Editar .env con las credenciales de tu base de datos local
+---
 
-# 5. Levantar la aplicación
-uvicorn src.main:app --reload
-```
+## 🛠️ Stack Tecnológico
 
-## Conectarse al cluster de DigitalOcean
+- **Python 3.11+**
+- **PostgreSQL 15+**
+- `fastapi`, `uvicorn[standard]`
+- `sqlalchemy`, `psycopg2-binary`
+- `pydantic-settings`
+- `httpx`
 
-Requisitos:
-- Tener instalado [doctl](https://docs.digitalocean.com/reference/doctl/)
-- Tener instalado [kubectl](https://kubernetes.io/docs/tasks/tools/)
+**Testing:**
+- `pytest`, `pytest-asyncio`, `pytest-httpx`
+- Los tests de integración levantan una base de datos real en Docker (`docker-compose.test.yml`) y mockean todas las peticiones salientes con `pytest-httpx`.
 
-```bash
-# 1. Iniciar sesión en doctl
-doctl auth init --context <NAME>
-doctl auth switch --context <NAME>
+---
 
-# 2. Obtener credenciales del cluster
-doctl kubernetes cluster kubeconfig save <CLUSTER_ID>
-```
+## 🔑 Variables de Entorno
 
-## Endpoints disponibles
+El servicio requiere la configuración de las siguientes variables para inicializarse:
 
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/livez` | Liveness probe — siempre 200 |
-| GET | `/readyz` | Readiness probe — verifica conexión a DB |
-| GET | `/docs` | Swagger UI (auto-generado) |
-| GET | `/redoc` | ReDoc (auto-generado) |
+| Variable | Descripción |
+|----------|-------------|
+| `APP_NAME` | Nombre de la app (Ej: "Payments Microservice"). |
+| `DATABASE_URL` | DSN de PostgreSQL (Ej: `postgresql://user:pass@db:5432/payments`). |
+| `MP_ACCESS_TOKEN` | Token de Producción/Test provisto por MercadoPago. |
+| `MP_WEBHOOK_SECRET` | Secreto asignado por MercadoPago para validación HMAC-SHA256 del webhook. |
+| `ORDERS_SERVICE_URL` | URL base del MS de Órdenes interno (Ej: `http://orders-service:8000`). |
 
-## Tests
+*(Importante: Estas variables se inyectan en K8s vía Kubernetes Secrets).*
 
-Los tests corren contra una **base de datos PostgreSQL real** usando Docker Compose. No se usa mocking.
+---
 
-El archivo `docker-compose.test.yml` levanta:
-1. Un contenedor **PostgreSQL 16** como base de datos.
-2. Un contenedor **test-runner** que ejecuta `pytest` contra esa base de datos.
+## 📡 Endpoints Principales
 
-### Correr los tests
-
-```bash
-# Linux / macOS
-./scripts/run_tests.sh
-
-# Windows (PowerShell)
-.\scripts\run_tests.ps1
-
-# O directamente con docker compose
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
-```
-
-> Los contenedores se limpian automáticamente al finalizar.
-
-## Docker
-
-```bash
-docker build -t template-service .
-docker run -p 8000:8000 --env-file .env template-service
-```
-
-## Kubernetes
-
-Los manifiestos en `k8s/` despliegan el microservicio junto con su propia base de datos PostgreSQL dentro del cluster.
-
-### Variables de entorno requeridas (GitHub Secrets)
-
-| Secret | Descripción |
-|--------|-------------|
-| `DIGITALOCEAN_ACCESS_TOKEN` | Personal Access Token de DigitalOcean |
-| `DB_USER` | Usuario de la base de datos |
-| `DB_PASSWORD` | Contraseña de la base de datos |
-| `DB_NAME` | Nombre de la base de datos |
-
-`DB_HOST` y `DB_PORT` están fijos en `k8s/secret.yaml` (`bazaar-db:5432`) ya que la BD corre dentro del cluster.
-Si se utilizase una base de datos externa, se deberían agregar las variables de entorno correspondientes.
-
-### Deploy manual
-
-```bash
-# Crear el namespace (solo la primera vez)
-kubectl create namespace bazaar-dev
-
-# Aplicar todos los manifiestos en orden
-kubectl apply -f k8s/db-pvc.yaml       -n bazaar-dev
-kubectl apply -f k8s/db-deployment.yaml -n bazaar-dev
-kubectl apply -f k8s/db-service.yaml    -n bazaar-dev
-kubectl apply -f k8s/secret.yaml        -n bazaar-dev
-kubectl apply -f k8s/app-deployment.yaml -n bazaar-dev
-kubectl apply -f k8s/app-service.yaml   -n bazaar-dev
-```
-
-### CI/CD automático
-
-Hay dos pipelines de GitHub Actions:
-
-**`ci-dev.yml`** — corre en cada push/PR a `dev`:
-
-| Job | Descripción |
-|-----|-------------|
-| `lint` | Ruff sobre `src/` y `tests/` |
-| `sast` | Bandit (análisis estático de seguridad) sobre `src/` |
-| `test` | Tests contra PostgreSQL real vía Docker Compose |
-
-**`deploy.yml`** — corre en cada push a `main`:
-
-| Job | Se ejecuta cuando cambia... |
-|-----|----------------------------|
-| `lint` | `src/`, `tests/`, archivos de build |
-| `test` | `src/`, `tests/`, archivos de build |
-| `build` | `src/`, `tests/`, archivos de build (solo push a main) |
-| `deploy` | `src/` **o** `k8s/` (solo push a main) |
-
-## Conexión a la base de datos
-
-Al iniciar, la aplicación espera a que la base de datos esté disponible usando **backoff exponencial** (1s → 2s → 4s → … hasta 30s por intento, máximo 5 minutos en total) antes de ejecutar las migraciones y aceptar tráfico. Esto evita crasheos durante el arranque del pod cuando la BD aún está inicializándose.
-
-## Extender el template
-
-Para agregar una nueva entidad al microservicio:
-
-1. Crear el modelo SQLAlchemy en `src/models/`.
-2. Crear los schemas Pydantic en `src/schemas/`.
-3. Implementar el repositorio de acceso a datos en `src/repositories/`.
-4. Definir las excepciones de dominio en `src/exceptions/`.
-5. Implementar la lógica de negocio en `src/services/`.
-6. Crear el controller en `src/api/controllers/` y el router en `src/api/routers/`; incluir el router en `src/main.py`.
-7. Agregar tests en `tests/`.
+- **`POST /payments/preferences`**: Solicita la generación de una URL de Checkout (Idempotente).
+- **`GET /payments/{order_id}/status`**: Endpoint de polling para consultar el estado interno (PENDING, APPROVED, REJECTED).
+- **`POST /payments/mp-webhook`**: Endpoint público sin autenticación, asegurado mediante firmas HMAC, que recibe las notificaciones asíncronas de MercadoPago.

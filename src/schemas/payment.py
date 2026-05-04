@@ -10,21 +10,33 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+# ── Item ─────────────────────────────────────────────────────
+
+
+class Item(BaseModel):
+    """A single item within a preference request."""
+
+    title: str = Field(
+        ..., description="Descripción del ítem a mostrar en MercadoPago."
+    )
+    quantity: int = Field(..., ge=1, json_schema_extra={"example": 1})
+    unit_price: float = Field(
+        ..., gt=0, description="Precio unitario del ítem."
+    )
+
+
 # ── Requests ─────────────────────────────────────────────────
 
 
 class PreferenceRequest(BaseModel):
-    """Body for ``POST /api/v1/payments/preferences``."""
+    """Body for ``POST /payments/preferences``."""
 
     order_id: UUID = Field(
         ..., description="ID de la orden generada por el orquestador."
     )
-    title: str = Field(
-        ..., description="Descripción de la compra a mostrar en MercadoPago."
-    )
-    quantity: int = Field(..., ge=1, example=1)
-    unit_price: float = Field(
-        ..., gt=0, description="Monto total a cobrar."
+    items: list[Item] = Field(
+        ...,
+        description="Lista de ítems a cobrar en MercadoPago.",
     )
 
 
@@ -32,7 +44,7 @@ class PreferenceRequest(BaseModel):
 
 
 class PreferenceResponse(BaseModel):
-    """Successful response for ``POST /api/v1/payments/preferences``."""
+    """Successful response for ``POST /payments/preferences``."""
 
     preference_id: str = Field(
         ..., description="ID interno de la preferencia de MercadoPago."
@@ -47,7 +59,7 @@ class PreferenceResponse(BaseModel):
 
 
 class PaymentStatusResponse(BaseModel):
-    """Response for ``GET /api/v1/payments/{order_id}/status``."""
+    """Response for ``GET /payments/{order_id}/status``."""
 
     order_id: UUID
     payment_status: str = Field(

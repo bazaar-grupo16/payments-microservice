@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 from src.models.payment import PaymentStatus
 from src.repositories import payment_repository as repo
 
+_SAMPLE_ITEMS = [
+    {"title": "Test product", "quantity": 1, "unit_price": 250.00}
+]
+
 
 class TestCreatePayment:
     """Tests for ``create_payment``."""
@@ -26,16 +30,14 @@ class TestCreatePayment:
             order_id=order_id,
             idempotency_key=key,
             amount=Decimal("250.00"),
-            title="Test purchase",
-            quantity=2,
+            items=_SAMPLE_ITEMS,
         )
 
         assert payment.id is not None
         assert payment.order_id == order_id
         assert payment.idempotency_key == key
         assert payment.amount == Decimal("250.00")
-        assert payment.title == "Test purchase"
-        assert payment.quantity == 2
+        assert payment.items == _SAMPLE_ITEMS
         assert payment.status == PaymentStatus.PENDING
 
     def test_create_sets_pending_status(self, db_session: Session) -> None:
@@ -45,8 +47,7 @@ class TestCreatePayment:
             order_id=uuid.uuid4(),
             idempotency_key=str(uuid.uuid4()),
             amount=Decimal("100.00"),
-            title="Status check",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
         assert payment.status == PaymentStatus.PENDING
 
@@ -61,8 +62,7 @@ class TestGetByIdempotencyKey:
             order_id=uuid.uuid4(),
             idempotency_key=key,
             amount=Decimal("50.00"),
-            title="Idempotency test",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
 
         found = repo.get_by_idempotency_key(db_session, key)
@@ -84,8 +84,7 @@ class TestGetByOrderId:
             order_id=order_id,
             idempotency_key=str(uuid.uuid4()),
             amount=Decimal("75.00"),
-            title="Order lookup test",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
 
         found = repo.get_by_order_id(db_session, order_id)
@@ -108,8 +107,7 @@ class TestGetByMpPreferenceId:
             order_id=uuid.uuid4(),
             idempotency_key=str(uuid.uuid4()),
             amount=Decimal("200.00"),
-            title="Preference lookup",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
         repo.update_with_preference(
             db_session,
@@ -136,8 +134,7 @@ class TestUpdateWithPreference:
             order_id=uuid.uuid4(),
             idempotency_key=str(uuid.uuid4()),
             amount=Decimal("300.00"),
-            title="Preference update",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
 
         updated = repo.update_with_preference(
@@ -160,8 +157,7 @@ class TestUpdateStatus:
             order_id=uuid.uuid4(),
             idempotency_key=str(uuid.uuid4()),
             amount=Decimal("150.00"),
-            title="Approval test",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
 
         updated = repo.update_status(
@@ -182,8 +178,7 @@ class TestUpdateStatus:
             order_id=uuid.uuid4(),
             idempotency_key=str(uuid.uuid4()),
             amount=Decimal("99.99"),
-            title="Rejection test",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
 
         updated = repo.update_status(
@@ -202,8 +197,7 @@ class TestUpdateStatus:
             order_id=uuid.uuid4(),
             idempotency_key=str(uuid.uuid4()),
             amount=Decimal("500.00"),
-            title="Persistence test",
-            quantity=1,
+            items=_SAMPLE_ITEMS,
         )
 
         repo.update_status(

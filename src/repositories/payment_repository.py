@@ -22,16 +22,14 @@ def create_payment(
     order_id: UUID,
     idempotency_key: str,
     amount: Decimal,
-    title: str,
-    quantity: int,
+    items: list[dict],
 ) -> Payment:
     """Insert a new payment row in PENDING status and return it."""
     payment = Payment(
         order_id=order_id,
         idempotency_key=idempotency_key,
         amount=amount,
-        title=title,
-        quantity=quantity,
+        items=items,
     )
     db.add(payment)
     db.commit()
