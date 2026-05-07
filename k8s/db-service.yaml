@@ -1,16 +1,16 @@
 # ──────────────────────────────────────────────────────────────
-# Kubernetes Service — Bazaar PostgreSQL Database
+# Kubernetes Service — Payments PostgreSQL Database
 # ──────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
-  name: bazaar-db
+  name: payments-db
   labels:
-    app: bazaar-db
+    app: payments-db
 spec:
   type: ClusterIP
   selector:
-    app: bazaar-db
+    app: payments-db
   ports:
     - protocol: TCP
       port: 5432

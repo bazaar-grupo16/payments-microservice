@@ -1,21 +1,21 @@
 # ──────────────────────────────────────────────────────────────
-# Kubernetes Deployment — Bazaar PostgreSQL Database
+# Kubernetes Deployment — Payments PostgreSQL Database
 # ──────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: bazaar-db
+  name: payments-db
   labels:
-    app: bazaar-db
+    app: payments-db
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: bazaar-db
+      app: payments-db
   template:
     metadata:
       labels:
-        app: bazaar-db
+        app: payments-db
     spec:
       containers:
         - name: postgres
@@ -27,17 +27,17 @@ spec:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: bazaar-db-credentials
+                  name: payments-db-credentials
                   key: DB_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: bazaar-db-credentials
+                  name: payments-db-credentials
                   key: DB_PASSWORD
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: bazaar-db-credentials
+                  name: payments-db-credentials
                   key: DB_NAME
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
@@ -73,4 +73,4 @@ spec:
       volumes:
         - name: postgres-data
           persistentVolumeClaim:
-            claimName: bazaar-db-pvc
+            claimName: payments-db-pvc

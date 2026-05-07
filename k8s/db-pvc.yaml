@@ -1,12 +1,12 @@
 # ──────────────────────────────────────────────────────────────
-# PersistentVolumeClaim — Bazaar PostgreSQL Database
+# PersistentVolumeClaim — Payments PostgreSQL Database
 # ──────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: bazaar-db-pvc
+  name: payments-db-pvc
   labels:
-    app: bazaar-db
+    app: payments-db
 spec:
   accessModes:
     - ReadWriteOnce
