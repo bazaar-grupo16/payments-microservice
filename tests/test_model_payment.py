@@ -13,6 +13,10 @@ from sqlalchemy.orm import Session
 
 from src.models.payment import Payment, PaymentStatus
 
+_SAMPLE_ITEMS = [
+    {"title": "Compra Bazaar #1", "quantity": 1, "unit_price": 199.99}
+]
+
 
 class TestPaymentModel:
     """Validate that the Payment table schema and defaults work correctly."""
@@ -23,8 +27,7 @@ class TestPaymentModel:
             "order_id": uuid.uuid4(),
             "idempotency_key": str(uuid.uuid4()),
             "amount": Decimal("199.99"),
-            "title": "Compra Bazaar #1",
-            "quantity": 1,
+            "items": _SAMPLE_ITEMS,
         }
         defaults.update(overrides)
         return Payment(**defaults)
@@ -108,3 +111,18 @@ class TestPaymentModel:
         db_session.refresh(payment)
 
         assert payment.status == PaymentStatus.APPROVED
+
+    def test_items_stored_as_json(self, db_session: Session) -> None:
+        """The items JSON column stores and retrieves the items list."""
+        items = [
+            {"title": "Item A", "quantity": 2, "unit_price": 50.00},
+            {"title": "Item B", "quantity": 1, "unit_price": 100.00},
+        ]
+        payment = self._make_payment(items=items, amount=Decimal("200.00"))
+        db_session.add(payment)
+        db_session.commit()
+        db_session.refresh(payment)
+
+        assert len(payment.items) == 2
+        assert payment.items[0]["title"] == "Item A"
+        assert payment.items[1]["unit_price"] == 100.00

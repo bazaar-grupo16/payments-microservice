@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: payments-ingress
+  namespace: bazaar-dev
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "POST"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Content-Type, Authorization"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /payments/mp-webhook
+            pathType: Exact
+            backend:
+              service:
+                name: payments-service
+                port:
+                  number: 80
+          - path: /payments/debug
+            pathType: Exact
+            backend:
+              service:
+                name: payments-service
+                port:
+                  number: 80
+
