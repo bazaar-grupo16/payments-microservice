@@ -16,6 +16,7 @@ os.environ.setdefault("ORDERS_SERVICE_URL", "http://orders-service")
 root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
+# pyrefly: ignore [missing-import]
 from src.main import app
 
 def generate_openapi():

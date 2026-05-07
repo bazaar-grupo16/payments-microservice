@@ -40,6 +40,17 @@ class PreferenceRequest(BaseModel):
     )
 
 
+class DebugPaymentRequest(BaseModel):
+    """Body for the debug webhook endpoint."""
+
+    operation_id: UUID = Field(
+        ..., description="ID de la operación (orden) a simular."
+    )
+    accepted: bool = Field(
+        ..., description="Si el pago fue aceptado o rechazado."
+    )
+
+
 # ── Responses ────────────────────────────────────────────────
 
 

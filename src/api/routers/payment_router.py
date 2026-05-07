@@ -17,6 +17,7 @@ from src.schemas.payment import (
     PaymentStatusResponse,
     PreferenceRequest,
     PreferenceResponse,
+    DebugPaymentRequest,
 )
 from src.services import payment_service
 
@@ -128,4 +129,29 @@ async def mp_webhook(
             detail=str(exc),
         ) from exc
     return {"status": "ok"}
+
+
+@router.post(
+    "/debug",
+    status_code=status.HTTP_200_OK,
+    summary="Endpoint de debug para validar un pago manualmente.",
+    description="Simula un webhook para aprobar o rechazar un pago.",
+)
+async def debug_webhook(
+    body: DebugPaymentRequest,
+    db: DbSession,
+) -> dict:
+    """Manual debug webhook to resolve a payment."""
+    try:
+        await payment_service.process_debug_webhook(
+            db=db,
+            operation_id=body.operation_id,
+            accepted=body.accepted,
+        )
+    except PaymentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=exc.detail,
+        ) from exc
+    return {"status": "ok", "operation_id": body.operation_id, "accepted": body.accepted}
 

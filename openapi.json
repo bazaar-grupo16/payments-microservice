@@ -251,10 +251,76 @@
           }
         }
       }
+    },
+    "/payments/debug": {
+      "post": {
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Endpoint de debug para validar un pago manualmente.",
+        "description": "Simula un webhook para aprobar o rechazar un pago.",
+        "operationId": "debug_webhook_payments_debug_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DebugPaymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Debug Webhook Payments Debug Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "DebugPaymentRequest": {
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Operation Id",
+            "description": "ID de la operaci\u00f3n (orden) a simular."
+          },
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted",
+            "description": "Si el pago fue aceptado o rechazado."
+          }
+        },
+        "type": "object",
+        "required": [
+          "operation_id",
+          "accepted"
+        ],
+        "title": "DebugPaymentRequest",
+        "description": "Body for the debug webhook endpoint."
+      },
       "ErrorResponse": {
         "properties": {
           "detail": {

@@ -243,3 +243,39 @@ async def process_webhook(
                 order_id,
                 data_id,
             )
+
+
+async def process_debug_webhook(
+    db: Session,
+    *,
+    operation_id: UUID,
+    accepted: bool,
+) -> None:
+    """Process a manual/debug webhook to simulate a payment resolution."""
+    payment = repo.get_by_order_id(db, operation_id)
+    if not payment:
+        logger.warning("No payment found for operation_id=%s", operation_id)
+        raise PaymentNotFoundError(f"No payment found for order {operation_id}")
+
+    new_status = PaymentStatus.APPROVED if accepted else PaymentStatus.REJECTED
+    transaction_id = "DEBUG-TX"
+
+    if payment.status != new_status:
+        repo.update_status(
+            db,
+            payment,
+            status=new_status,
+            mp_payment_id=transaction_id,
+        )
+
+        notified = await orders_client.notify_payment_result(
+            order_id=str(operation_id),
+            status=new_status.value,
+            transaction_id=transaction_id,
+        )
+        if not notified:
+            logger.warning(
+                "Orders notification failed for operation_id=%s transaction_id=%s",
+                operation_id,
+                transaction_id,
+            )
