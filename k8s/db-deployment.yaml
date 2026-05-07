@@ -27,17 +27,17 @@ spec:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: payments-db-credentials
+                  name: payments-service-credentials
                   key: DB_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: payments-db-credentials
+                  name: payments-service-credentials
                   key: DB_PASSWORD
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: payments-db-credentials
+                  name: payments-service-credentials
                   key: DB_NAME
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
