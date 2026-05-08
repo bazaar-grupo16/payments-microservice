@@ -253,6 +253,51 @@ class TestWebhook:
         assert "Invalid webhook signature" in response.json()["detail"]
 
 
+    def test_webhook_sin_headers_de_firma_se_procesa(
+        self,
+        client: TestClient,
+        httpx_mock: HTTPXMock,
+        db_session: Session,
+    ) -> None:
+        """MercadoPago simulator payloads without signature headers should still be accepted."""
+        settings = get_settings()
+        order_id = str(uuid.uuid4())
+        _create_test_payment(db_session, order_id)
+        data_id = "123456"
+
+        httpx_mock.add_response(
+            url=f"https://api.mercadopago.com/v1/payments/{data_id}",
+            method="GET",
+            json={
+                "id": int(data_id),
+                "status": "approved",
+                "external_reference": order_id,
+            },
+        )
+        httpx_mock.add_response(
+            url=f"{settings.ORDERS_SERVICE_URL}/orders/{order_id}/payment-webhook",
+            method="POST",
+            json={"status": "ok"},
+            status_code=200,
+        )
+
+        response = client.post(
+            "/payments/mp-webhook",
+            json={
+                "action": "payment.updated",
+                "api_version": "v1",
+                "data": {"id": data_id},
+                "date_created": "2021-11-01T02:02:02Z",
+                "id": data_id,
+                "live_mode": False,
+                "type": "payment",
+                "user_id": 151898577,
+            },
+        )
+
+        assert response.status_code == 200
+
+
     def test_webhook_pago_inexistente(
         self,
         client: TestClient,

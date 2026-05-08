@@ -107,14 +107,16 @@ async def mp_webhook(
     payload: dict,
     request: Request,
     db: DbSession,
-    x_signature: str = Header(..., alias="x-signature"),
-    x_request_id: str = Header(..., alias="x-request-id"),
+    x_signature: str | None = Header(None, alias="x-signature"),
+    x_request_id: str | None = Header(None, alias="x-request-id"),
 ) -> dict:
     """Process a MercadoPago webhook."""
     data = payload.get("data", {})
     query_data_id = request.query_params.get("data.id")
     if query_data_id:
         payload = {**payload, "data": {**data, "id": query_data_id}}
+    elif not data.get("id") and payload.get("id"):
+        payload = {**payload, "data": {**data, "id": payload["id"]}}
 
     try:
         await payment_service.process_webhook(

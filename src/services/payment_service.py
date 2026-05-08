@@ -172,8 +172,8 @@ async def process_webhook(
     db: Session,
     *,
     payload: dict,
-    x_signature: str,
-    x_request_id: str,
+    x_signature: str | None = None,
+    x_request_id: str | None = None,
 ) -> None:
     """Process an incoming webhook from MercadoPago.
 
@@ -187,17 +187,23 @@ async def process_webhook(
         return
 
     # 2. Validate signature
-    settings = get_settings()
-    is_valid = validate_webhook_signature(
-        x_signature=x_signature,
-        x_request_id=x_request_id,
-        data_id=data_id,
-        secret=settings.MP_WEBHOOK_SECRET,
-    )
-    if not is_valid:
-        logger.warning("Invalid webhook signature for data_id=%s", data_id)
-        # We can raise an error or just ignore. Usually return 400.
-        raise ValueError("Invalid webhook signature")
+    if x_signature and x_request_id:
+        settings = get_settings()
+        is_valid = validate_webhook_signature(
+            x_signature=x_signature,
+            x_request_id=x_request_id,
+            data_id=data_id,
+            secret=settings.MP_WEBHOOK_SECRET,
+        )
+        if not is_valid:
+            logger.warning("Invalid webhook signature for data_id=%s", data_id)
+            # We can raise an error or just ignore. Usually return 400.
+            raise ValueError("Invalid webhook signature")
+    else:
+        logger.warning(
+            "Webhook received without signature headers; skipping validation for data_id=%s",
+            data_id,
+        )
 
     # 3. Fetch payment info from MP
     try:
