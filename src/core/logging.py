@@ -17,6 +17,22 @@ from typing import Optional
 from src.core.config import get_settings
 
 
+_HEALTH_PROBE_PATHS = {"/livez", "/readyz"}
+
+
+class HealthProbeAccessLogFilter(logging.Filter):
+    """Suppress access logs for the health probe endpoints."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "uvicorn.access":
+            return True
+
+        if not isinstance(record.args, tuple) or len(record.args) < 3:
+            return True
+
+        return record.args[2] not in _HEALTH_PROBE_PATHS
+
+
 def setup_logging(level_override: Optional[str] = None) -> None:
     """
     Configure the root logger with a structured JSON-like format.
@@ -48,3 +64,7 @@ def setup_logging(level_override: Optional[str] = None) -> None:
     # Avoid duplicate handlers on repeated calls.
     root.handlers.clear()
     root.addHandler(handler)
+
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, HealthProbeAccessLogFilter) for item in access_logger.filters):
+        access_logger.addFilter(HealthProbeAccessLogFilter())
