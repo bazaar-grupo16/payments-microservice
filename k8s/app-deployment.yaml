@@ -66,6 +66,16 @@ spec:
                 secretKeyRef:
                   name: payments-service-credentials
                   key: ORDERS_SERVICE_URL
+            - name: WEBHOOK_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payments-service-credentials
+                  key: WEBHOOK_BASE_URL
+            - name: BAZAAR_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payments-service-credentials
+                  key: BAZAAR_BASE_URL
           # ── Probes ─────────────────────────────────
           livenessProbe:
             httpGet:

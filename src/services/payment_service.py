@@ -107,11 +107,22 @@ async def create_preference(
         items=items,
     )
 
+    # ── Build notification and back URLs ────────────
+    settings = get_settings()
+    notification_url = f"{settings.WEBHOOK_BASE_URL}/payments/mp-webhook"
+    back_urls = {
+        "success": f"{settings.BAZAAR_BASE_URL}/{order_id}",
+        "pending": f"{settings.BAZAAR_BASE_URL}/{order_id}",
+        "failure": f"{settings.BAZAAR_BASE_URL}/{order_id}",
+    }
+
     # ── Call MercadoPago ─────────────────────────────
     try:
         result = await mp_client.create_preference(
             items=items,
             external_reference=str(order_id),
+            notification_url=notification_url,
+            back_urls=back_urls,
         )
     except httpx.HTTPStatusError as exc:
         logger.error(

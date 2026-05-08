@@ -77,6 +77,37 @@ class TestCreatePreference:
         assert body["external_reference"] == "ref-42"
 
     @pytest.mark.asyncio
+    async def test_sends_notification_url_and_back_urls(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """notification_url and back_urls should be included in the payload."""
+        httpx_mock.add_response(
+            url="https://api.mercadopago.com/checkout/preferences",
+            method="POST",
+            json={"id": "PREF-Y", "init_point": "https://mp.com/y"},
+            status_code=201,
+        )
+
+        notification_url = "https://payments.example.com/payments/mp-webhook"
+        back_urls = {
+            "success": "bazaar://order-polling/order-123",
+            "pending": "bazaar://order-polling/order-123",
+            "failure": "bazaar://order-polling/order-123",
+        }
+
+        await create_preference(
+            items=_SAMPLE_ITEMS,
+            external_reference="order-123",
+            notification_url=notification_url,
+            back_urls=back_urls,
+        )
+
+        request = httpx_mock.get_request()
+        body = __import__("json").loads(request.content)
+        assert body["notification_url"] == notification_url
+        assert body["back_urls"] == back_urls
+
+    @pytest.mark.asyncio
     async def test_raises_on_mp_error(self, httpx_mock: HTTPXMock) -> None:
         """A non-2xx response from MP should raise HTTPStatusError."""
         httpx_mock.add_response(

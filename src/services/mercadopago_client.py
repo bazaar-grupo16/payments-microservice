@@ -30,6 +30,8 @@ async def create_preference(
     *,
     items: list[dict],
     external_reference: str,
+    notification_url: str | None = None,
+    back_urls: dict | None = None,
     http_client: httpx.AsyncClient | None = None,
 ) -> PreferenceResult:
     """Create a Checkout Pro preference via the MercadoPago API.
@@ -41,6 +43,10 @@ async def create_preference(
         ``unit_price``.  Sent directly to the MP Preferences API.
     external_reference:
         Our ``order_id`` so MP can reference it back in webhooks.
+    notification_url:
+        Webhook URL for MP notifications. If ``None``, no webhook is configured.
+    back_urls:
+        Dict with "success", "pending", and "failure" URLs for post-payment redirect.
     http_client:
         Optional injected client (used in tests). If ``None``, a new
         ``httpx.AsyncClient`` is created for this call.
@@ -64,6 +70,12 @@ async def create_preference(
         "items": items,
         "external_reference": external_reference,
     }
+    
+    if notification_url:
+        payload["notification_url"] = notification_url
+    
+    if back_urls:
+        payload["back_urls"] = back_urls
 
     client = http_client or httpx.AsyncClient()
     try:

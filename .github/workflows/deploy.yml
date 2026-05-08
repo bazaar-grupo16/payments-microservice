@@ -145,9 +145,11 @@ jobs:
           MP_ACCESS_TOKEN: ${{ secrets.MP_ACCESS_TOKEN }}
           MP_WEBHOOK_SECRET: ${{ secrets.MP_WEBHOOK_SECRET }}
           ORDERS_SERVICE_URL: ${{ secrets.ORDERS_SERVICE_URL }}
+          WEBHOOK_BASE_URL: ${{ secrets.WEBHOOK_BASE_URL }}
+          BAZAAR_BASE_URL: ${{ secrets.BAZAAR_BASE_URL }}
         run: |
           sudo apt-get install -y gettext-base
           for f in k8s/*.yaml; do
-            envsubst '${IMAGE_NAME} ${IMAGE_TAG} ${DB_USER} ${DB_PASSWORD} ${DB_NAME} ${MP_ACCESS_TOKEN} ${MP_WEBHOOK_SECRET} ${ORDERS_SERVICE_URL}' \
+            envsubst '${IMAGE_NAME} ${IMAGE_TAG} ${DB_USER} ${DB_PASSWORD} ${DB_NAME} ${MP_ACCESS_TOKEN} ${MP_WEBHOOK_SECRET} ${ORDERS_SERVICE_URL} ${WEBHOOK_BASE_URL} ${BAZAAR_BASE_URL}' \
               < "$f" | kubectl apply -f - -n bazaar-dev
           done

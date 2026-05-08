@@ -57,6 +57,15 @@ class TestCreatePreference:
         assert body["preference_id"] == "PREF-TEST-1"
         assert "mercadopago" in body["init_point"]
 
+        # Verify that notification_url and back_urls were sent.
+        request = httpx_mock.get_request()
+        request_body = json.loads(request.content)
+        assert "notification_url" in request_body
+        assert "back_urls" in request_body
+        assert request_body["back_urls"]["success"] == f"bazaar://order-polling/{order_id}"
+        assert request_body["back_urls"]["pending"] == f"bazaar://order-polling/{order_id}"
+        assert request_body["back_urls"]["failure"] == f"bazaar://order-polling/{order_id}"
+
     def test_idempotency_returns_cached(
         self,
         client: TestClient,

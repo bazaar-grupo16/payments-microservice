@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     # ── MercadoPago ──────────────────────────────────
     MP_ACCESS_TOKEN: str
     MP_WEBHOOK_SECRET: str
+    WEBHOOK_BASE_URL: str = "https://payments.example.com"
+    BAZAAR_BASE_URL: str = "bazaar://order-polling"
 
     # ── Internal Services ────────────────────────────
     ORDERS_SERVICE_URL: str
