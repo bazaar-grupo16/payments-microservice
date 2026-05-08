@@ -1,16 +1,16 @@
 # ──────────────────────────────────────────────────────────────
-# Kubernetes Service — Bazaar Microservice
+# Kubernetes Service — Payments Microservice
 # ──────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
-  name: template-service
+  name: payments-service
   labels:
-    app: template-service
+    app: payments-service
 spec:
   type: ClusterIP
   selector:
-    app: template-service
+    app: payments-service
   ports:
     - protocol: TCP
       port: 80
