@@ -110,13 +110,38 @@ async def mp_webhook(
     x_signature: str | None = Header(None, alias="x-signature"),
     x_request_id: str | None = Header(None, alias="x-request-id"),
 ) -> dict:
-    """Process a MercadoPago webhook."""
+    """Process a MercadoPago webhook.
+    
+    Handles two types of webhooks:
+    - payment: has data.id in the body or ?data.id= query param
+    - merchant_order: has id at root level (from ?id= query param or body)
+    """
+    # Normalize payload to always have data.id for consistent processing
     data = payload.get("data", {})
+    # webhook_type = payload.get("type") or payload.get("topic")
+    
+    # Extract ID from various locations (in order of preference):
+    # 1. Query param ?id=... (for merchant_order webhooks)
+    # 2. Query param ?data.id=... (legacy format)
+    # 3. Body data.id (standard payment webhooks)
+    # 4. Body root id (merchant_order in body)
+    
+    query_id = request.query_params.get("id")
     query_data_id = request.query_params.get("data.id")
-    if query_data_id:
+    
+    if query_id:
+        payload = {**payload, "data": {**data, "id": query_id}}
+    elif query_data_id:
         payload = {**payload, "data": {**data, "id": query_data_id}}
     elif not data.get("id") and payload.get("id"):
         payload = {**payload, "data": {**data, "id": payload["id"]}}
+    
+    logger.info(
+        "Received webhook — type=%s, topic=%s, data.id=%s",
+        payload.get("type"),
+        payload.get("topic"),
+        payload.get("data", {}).get("id"),
+    )
 
     try:
         await payment_service.process_webhook(

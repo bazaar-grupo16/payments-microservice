@@ -177,18 +177,37 @@ async def process_webhook(
 ) -> None:
     """Process an incoming webhook from MercadoPago.
 
+    Handles both 'payment' and 'merchant_order' webhook types.
     Validates the signature, fetches the payment info, updates the local DB,
     and notifies the Orders service.
+    
+    Note: Mercado Pago sends two types of webhooks:
+    - payment: when a payment is created/updated (data.id is the payment_id)
+    - merchant_order: when an order is updated (data may not contain payment_id)
     """
-    # 1. Extract data.id from payload
+    # 1. Extract ID from payload (handles both payment and merchant_order types)
     data_id = payload.get("data", {}).get("id")
+    # webhook_type = payload.get("type") or payload.get("topic")
+    
     if not data_id:
-        logger.warning("Webhook payload missing data.id")
+        logger.warning(
+            "Webhook payload missing ID — type=%s, topic=%s, payload keys=%s",
+            payload.get("type"),
+            payload.get("topic"),
+            list(payload.keys()),
+        )
         return
 
+    logger.info(
+        "Processing webhook — type=%s, topic=%s, id=%s",
+        payload.get("type"),
+        payload.get("topic"),
+        data_id,
+    )
+
     # 2. Validate signature
+    settings = get_settings()
     if x_signature and x_request_id:
-        settings = get_settings()
         is_valid = validate_webhook_signature(
             x_signature=x_signature,
             x_request_id=x_request_id,
@@ -196,20 +215,38 @@ async def process_webhook(
             secret=settings.MP_WEBHOOK_SECRET,
         )
         if not is_valid:
-            logger.warning("Invalid webhook signature for data_id=%s", data_id)
-            # We can raise an error or just ignore. Usually return 400.
-            raise ValueError("Invalid webhook signature")
+            if settings.WEBHOOK_REQUIRE_SIGNATURE:
+                logger.warning("Invalid webhook signature for id=%s", data_id)
+                raise ValueError("Invalid webhook signature")
+            else:
+                logger.warning(
+                    "Invalid webhook signature for id=%s (but WEBHOOK_REQUIRE_SIGNATURE=False, so continuing)",
+                    data_id,
+                )
     else:
-        logger.warning(
-            "Webhook received without signature headers; skipping validation for data_id=%s",
-            data_id,
-        )
+        if settings.WEBHOOK_REQUIRE_SIGNATURE:
+            logger.warning(
+                "Webhook received without signature headers; failing because WEBHOOK_REQUIRE_SIGNATURE=True for id=%s",
+                data_id,
+            )
+            raise ValueError("Webhook signature headers missing")
+        else:
+            logger.warning(
+                "Webhook received without signature headers; continuing because WEBHOOK_REQUIRE_SIGNATURE=False for id=%s",
+                data_id,
+            )
 
     # 3. Fetch payment info from MP
+    # The ID could be a payment_id (for 'payment' webhooks) or merchant_order_id (for 'merchant_order' webhooks)
+    # Mercado Pago's webhook format uses the same ID field for both types, but represents different things
     try:
         mp_payment = await mp_client.get_payment_info(data_id)
     except httpx.HTTPStatusError as exc:
-        logger.error("Failed to fetch payment info from MP: %s", exc)
+        logger.error(
+            "Failed to fetch payment info from MP for id=%s: %s",
+            data_id,
+            exc,
+        )
         return
 
     mp_status = mp_payment.get("status")

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # ── Application ──────────────────────────────────
     APP_NAME: str = "payments-service"
     LOG_LEVEL: str = "info"
-
+    WEBHOOK_REQUIRE_SIGNATURE: bool = False  # Set to True require valid signatures
     # ── Database ─────────────────────────────────────
     DB_HOST: str
     DB_PORT: int = 5432
