@@ -198,18 +198,32 @@
           {
             "name": "x-signature",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "X-Signature"
             }
           },
           {
             "name": "x-request-id",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "X-Request-Id"
             }
           }
@@ -282,6 +296,80 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/payments/{order_id}/refund": {
+      "post": {
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Solicita un reembolso de pago.",
+        "description": "Comunica con MercadoPago para reembolsar un pago y actualiza el estado local.",
+        "operationId": "request_refund_payments__order_id__refund_post",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefundResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Gateway"
           },
           "422": {
             "description": "Validation Error",
@@ -386,7 +474,7 @@
           },
           "payment_status": {
             "type": "string",
-            "pattern": "^(PENDING|APPROVED|REJECTED)$",
+            "pattern": "^(PENDING|APPROVED|REJECTED|CANCELED|REFUNDED)$",
             "title": "Payment Status",
             "description": "Estado actual del pago."
           }
@@ -444,6 +532,53 @@
         ],
         "title": "PreferenceResponse",
         "description": "Successful response for ``POST /payments/preferences``."
+      },
+      "RefundRequest": {
+        "properties": {
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Amount",
+            "description": "Monto a reembolsar. Si se omite, reembolso total."
+          }
+        },
+        "type": "object",
+        "title": "RefundRequest",
+        "description": "Body for ``POST /payments/{order_id}/refund``."
+      },
+      "RefundResponse": {
+        "properties": {
+          "refund_id": {
+            "type": "string",
+            "title": "Refund Id",
+            "description": "ID del reembolso en MercadoPago."
+          },
+          "order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Id",
+            "description": "ID de la orden."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Estado del reembolso."
+          },
+          "amount": {
+            "type": "number",
+            "title": "Amount",
+            "description": "Monto reembolsado."
+          }
+        },
+        "type": "object",
+        "required": [
+          "refund_id",
+          "order_id",
+          "status",
+          "amount"
+        ],
+        "title": "RefundResponse",
+        "description": "Response for a successful refund request."
       },
       "ValidationError": {
         "properties": {

@@ -42,10 +42,13 @@ def _map_mp_status(mp_status: str | None) -> PaymentStatus | None:
     Non-final or unknown states are ignored to avoid regressing a
     payment back to ``PENDING`` after it has already been resolved.
     """
+    # Only map final states. Non-final statuses must be ignored.
     if mp_status == "approved":
         return PaymentStatus.APPROVED
-    if mp_status in ("rejected", "cancelled"):
+    if mp_status in ("rejected", "cancelled", "canceled"):
         return PaymentStatus.REJECTED
+    if mp_status in ("refunded", "charged_back"):
+        return PaymentStatus.REFUNDED
     return None
 
 
@@ -333,3 +336,97 @@ async def process_debug_webhook(
                 operation_id,
                 transaction_id,
             )
+
+
+async def request_refund(
+    db: Session,
+    *,
+    order_id: UUID,
+    amount: float | None = None,
+) -> dict:
+    """Request a refund for a payment.
+
+    Parameters
+    ----------
+    db:
+        Active SQLAlchemy session.
+    order_id:
+        Order UUID to refund.
+    amount:
+        Optional refund amount. If None, full refund is requested.
+
+    Returns
+    -------
+    dict
+        Contains information about the refund request.
+
+    Raises
+    ------
+    PaymentNotFoundError
+        If no payment record exists for the given order.
+    MercadoPagoError
+        If the MercadoPago API call fails.
+    """
+    payment = repo.get_by_order_id(db, order_id)
+    if not payment:
+        logger.warning("No payment found for order_id=%s", order_id)
+        raise PaymentNotFoundError(f"No payment found for order {order_id}")
+
+    # Check if already refunded
+    if payment.status == PaymentStatus.REFUNDED:
+        logger.info(
+            "Payment %s already refunded, skipping",
+            payment.id,
+        )
+        return {
+            "refund_id": payment.mp_payment_id,
+            "order_id": str(order_id),
+            "status": "already_refunded",
+            "amount": float(payment.amount) if payment.amount else None,
+        }
+
+    # Request refund from MercadoPago
+    if not payment.mp_payment_id:
+        logger.error(
+            "Cannot refund payment %s — no mp_payment_id",
+            payment.id,
+        )
+        raise MercadoPagoError(
+            "Payment has no MercadoPago payment ID"
+        )
+
+    try:
+        refund_data = await mp_client.create_refund(
+            payment.mp_payment_id,
+            amount=amount,
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "MercadoPago refund API error for payment %s: %s",
+            payment.id,
+            exc,
+        )
+        raise MercadoPagoError(
+            f"MercadoPago refund failed: {exc.response.status_code}"
+        ) from exc
+
+    # Update payment status to CANCELED
+    repo.update_status(
+        db,
+        payment,
+        status=PaymentStatus.CANCELED,
+        mp_payment_id=payment.mp_payment_id,
+    )
+
+    logger.info(
+        "Refund requested for payment %s — refund_id=%s",
+        payment.id,
+        refund_data.get("id"),
+    )
+
+    return {
+        "refund_id": str(refund_data.get("id")),
+        "order_id": str(order_id),
+        "status": refund_data.get("status", "pending"),
+        "amount": refund_data.get("amount"),
+    }

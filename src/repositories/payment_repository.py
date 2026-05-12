@@ -67,6 +67,15 @@ def get_by_mp_preference_id(db: Session, preference_id: str) -> Payment | None:
     )
 
 
+def get_by_mp_payment_id(db: Session, mp_payment_id: str) -> Payment | None:
+    """Look up a payment by its MercadoPago payment ID."""
+    return (
+        db.query(Payment)
+        .filter(Payment.mp_payment_id == mp_payment_id)
+        .first()
+    )
+
+
 def update_with_preference(
     db: Session,
     payment: Payment,

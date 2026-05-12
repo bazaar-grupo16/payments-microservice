@@ -18,6 +18,8 @@ from src.schemas.payment import (
     PreferenceRequest,
     PreferenceResponse,
     DebugPaymentRequest,
+    RefundRequest,
+    RefundResponse,
 )
 from src.services import payment_service
 
@@ -181,4 +183,41 @@ async def debug_webhook(
             detail=exc.detail,
         ) from exc
     return {"status": "ok", "operation_id": body.operation_id, "accepted": body.accepted}
+
+
+@router.post(
+    "/{order_id}/refund",
+    status_code=status.HTTP_200_OK,
+    response_model=RefundResponse,
+    responses={
+        404: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+    },
+    summary="Solicita un reembolso de pago.",
+    description="Comunica con MercadoPago para reembolsar un pago y actualiza el estado local.",
+)
+async def request_refund(
+    order_id: UUID,
+    body: RefundRequest,
+    db: DbSession,
+) -> RefundResponse:
+    """Request a refund for a payment."""
+    try:
+        result = await payment_service.request_refund(
+            db,
+            order_id=order_id,
+            amount=body.amount,
+        )
+        return RefundResponse(**result)
+    except PaymentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=exc.detail,
+        ) from exc
+    except MercadoPagoError as exc:
+        logger.error("MercadoPago refund error: %s", exc.detail)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=exc.detail,
+        ) from exc
 

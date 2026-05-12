@@ -69,13 +69,40 @@ class PreferenceResponse(BaseModel):
     )
 
 
+class RefundRequest(BaseModel):
+    """Body for ``POST /payments/{order_id}/refund``."""
+
+    amount: float = Field(
+        default=None,
+        gt=0,
+        description="Monto a reembolsar. Si se omite, reembolso total.",
+    )
+
+
+class RefundResponse(BaseModel):
+    """Response for a successful refund request."""
+
+    refund_id: str = Field(
+        ..., description="ID del reembolso en MercadoPago."
+    )
+    order_id: UUID = Field(
+        ..., description="ID de la orden."
+    )
+    status: str = Field(
+        ..., description="Estado del reembolso."
+    )
+    amount: float = Field(
+        ..., description="Monto reembolsado."
+    )
+
+
 class PaymentStatusResponse(BaseModel):
     """Response for ``GET /payments/{order_id}/status``."""
 
     order_id: UUID
     payment_status: str = Field(
         ...,
-        pattern="^(PENDING|APPROVED|REJECTED)$",
+        pattern="^(PENDING|APPROVED|REJECTED|CANCELED|REFUNDED)$",
         description="Estado actual del pago.",
     )
 

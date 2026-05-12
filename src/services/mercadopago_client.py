@@ -148,3 +148,66 @@ async def get_payment_info(
         data.get("status"),
     )
     return data
+
+
+async def create_refund(
+    payment_id: str,
+    *,
+    amount: float | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> dict:
+    """Request a refund for a payment from MercadoPago.
+
+    Parameters
+    ----------
+    payment_id:
+        The MercadoPago payment ID to refund.
+    amount:
+        Optional refund amount. If ``None``, full refund is requested.
+    http_client:
+        Optional injected client for testing.
+
+    Returns
+    -------
+    dict
+        Refund object from MercadoPago with keys like ``id``,
+        ``payment_id``, ``amount``, ``status``, etc.
+
+    Raises
+    ------
+    httpx.HTTPStatusError
+        If MercadoPago returns a non-2xx status.
+    """
+    settings = get_settings()
+    headers = {
+        "Authorization": f"Bearer {settings.MP_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": f"refund-{payment_id}-{amount or 'full'}",
+    }
+    
+    payload = {}
+    if amount is not None:
+        payload["amount"] = amount
+
+    client = http_client or httpx.AsyncClient()
+    try:
+        response = await client.post(
+            f"{_MP_BASE_URL}/v1/payments/{payment_id}/refunds",
+            json=payload,
+            headers=headers,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    finally:
+        if http_client is None:
+            await client.aclose()
+
+    data = response.json()
+    logger.info(
+        "Created refund %s for MP payment %s — status=%s, amount=%s",
+        data.get("id"),
+        payment_id,
+        data.get("status"),
+        data.get("amount"),
+    )
+    return data
