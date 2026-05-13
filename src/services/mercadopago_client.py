@@ -154,6 +154,7 @@ async def create_refund(
     payment_id: str,
     *,
     amount: float | None = None,
+    idempotency_key: str,
     http_client: httpx.AsyncClient | None = None,
 ) -> dict:
     """Request a refund for a payment from MercadoPago.
@@ -164,6 +165,9 @@ async def create_refund(
         The MercadoPago payment ID to refund.
     amount:
         Optional refund amount. If ``None``, full refund is requested.
+    idempotency_key:
+        Unique key to guarantee idempotency of the refund request.
+        Should be built by the caller as ``{order_id}-{order_item_id}``.
     http_client:
         Optional injected client for testing.
 
@@ -182,7 +186,7 @@ async def create_refund(
     headers = {
         "Authorization": f"Bearer {settings.MP_ACCESS_TOKEN}",
         "Content-Type": "application/json",
-        "X-Idempotency-Key": f"refund-{payment_id}-{amount or 'full'}",
+        "X-Idempotency-Key": idempotency_key,
     }
     
     payload = {}

@@ -11,7 +11,13 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from src.core.dependencies import DbSession
-from src.exceptions import MercadoPagoError, PaymentNotFoundError
+from src.exceptions import (
+    MercadoPagoError,
+    PaymentItemAlreadyRefundedError,
+    PaymentItemNotFoundError,
+    PaymentNotFoundError,
+    PaymentNotRefundableError,
+)
 from src.schemas.payment import (
     ErrorResponse,
     PaymentStatusResponse,
@@ -190,28 +196,49 @@ async def debug_webhook(
     status_code=status.HTTP_200_OK,
     response_model=RefundResponse,
     responses={
+        400: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
     },
-    summary="Solicita un reembolso de pago.",
-    description="Comunica con MercadoPago para reembolsar un pago y actualiza el estado local.",
+    summary="Solicita un reembolso de un ítem de pago.",
+    description=(
+        "Reembolsa un ítem específico de la orden. Si todos los ítems quedan "
+        "reembolsados, el pago completo se marca como REFUNDED."
+    ),
 )
 async def request_refund(
     order_id: UUID,
     body: RefundRequest,
     db: DbSession,
 ) -> RefundResponse:
-    """Request a refund for a payment."""
+    """Request a refund for a specific item within a payment."""
     try:
         result = await payment_service.request_refund(
             db,
             order_id=order_id,
-            amount=body.amount,
+            order_item_id=body.order_item_id,
         )
         return RefundResponse(**result)
     except PaymentNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=exc.detail,
+        ) from exc
+    except PaymentItemNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=exc.detail,
+        ) from exc
+    except PaymentItemAlreadyRefundedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.detail,
+        ) from exc
+    except PaymentNotRefundableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=exc.detail,
         ) from exc
     except MercadoPagoError as exc:
@@ -220,4 +247,3 @@ async def request_refund(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=exc.detail,
         ) from exc
-

@@ -1,5 +1,15 @@
 """
 Integration tests for ``POST /payments/{order_id}/refund``.
+
+Tests the per-item refund endpoint, covering:
+- Successful partial refund (single item)
+- Successful full refund (all items → payment marked REFUNDED)
+- Payment not found → 404
+- Item not found in payment → 404
+- Item already refunded → 409
+- Payment not in APPROVED status → 422
+- Missing order_item_id in body → 422 (Pydantic validation)
+- No mp_payment_id on payment → 502
 """
 
 import uuid
@@ -13,16 +23,59 @@ from src.models.payment import Payment, PaymentStatus
 from src.core.config import get_settings
 
 
-def _create_approved_payment(db: Session, order_id: str) -> Payment:
-    """Create an approved payment in the DB."""
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+ITEM_ID_1 = "item-aaa-111"
+ITEM_ID_2 = "item-bbb-222"
+
+_SINGLE_ITEM = [
+    {
+        "title": "Remera",
+        "quantity": 2,
+        "unit_price": 50.00,
+        "line_item_id": ITEM_ID_1,
+        "refunded": False,
+    }
+]
+
+_TWO_ITEMS = [
+    {
+        "title": "Remera",
+        "quantity": 2,
+        "unit_price": 50.00,
+        "line_item_id": ITEM_ID_1,
+        "refunded": False,
+    },
+    {
+        "title": "Pantalón",
+        "quantity": 1,
+        "unit_price": 80.00,
+        "line_item_id": ITEM_ID_2,
+        "refunded": False,
+    },
+]
+
+
+def _create_payment(
+    db: Session,
+    order_id: str,
+    *,
+    status: PaymentStatus = PaymentStatus.APPROVED,
+    items: list[dict] | None = None,
+    mp_payment_id: str | None = "MP-PAY-12345",
+) -> Payment:
+    """Create a payment in the DB with the given parameters."""
+    if items is None:
+        items = _SINGLE_ITEM[:]  # default: one item
+
     payment = Payment(
         order_id=uuid.UUID(order_id),
         idempotency_key=str(uuid.uuid4()),
         amount=Decimal("100.00"),
-        items=[{"title": "Test item", "quantity": 1, "unit_price": 100.00}],
-        status=PaymentStatus.APPROVED,
+        items=items,
+        status=status,
         mp_preference_id="PREF-TEST",
-        mp_payment_id="MP-PAY-12345",
+        mp_payment_id=mp_payment_id,
     )
     db.add(payment)
     db.commit()
@@ -30,165 +83,285 @@ def _create_approved_payment(db: Session, order_id: str) -> Payment:
     return payment
 
 
-class TestRefundEndpoint:
+def _mp_refund_response(amount: float, refund_id: str = "REF-123") -> dict:
+    return {
+        "id": refund_id,
+        "payment_id": 12345,
+        "amount": amount,
+        "status": "approved",
+    }
+
+
+# ── Endpoint tests ─────────────────────────────────────────────────────────
+
+
+class TestRefundByItem:
     """Tests for ``POST /payments/{order_id}/refund``."""
 
-    def test_full_refund_success(
+    def test_single_item_refund_success(
         self,
         client: TestClient,
         httpx_mock: HTTPXMock,
         db_session: Session,
     ) -> None:
-        """A full refund request updates DB to CANCELED and calls MercadoPago."""
+        """Refunding the only item marks it as refunded and upgrades payment to REFUNDED."""
         order_id = str(uuid.uuid4())
-        _create_approved_payment(db_session, order_id)
+        _create_payment(db_session, order_id, items=list(_SINGLE_ITEM))
 
-        # Mock MercadoPago refund endpoint
+        # Expected amount: 2 × 50.00 = 100.00
         httpx_mock.add_response(
             url="https://api.mercadopago.com/v1/payments/MP-PAY-12345/refunds",
             method="POST",
-            json={
-                "id": "REF-123",
-                "payment_id": 12345,
-                "amount": 100.00,
-                "status": "approved",
-            },
+            json=_mp_refund_response(100.00),
             status_code=201,
         )
 
         response = client.post(
             f"/payments/{order_id}/refund",
-            json={},
+            json={"order_item_id": ITEM_ID_1},
         )
 
         assert response.status_code == 200
         body = response.json()
         assert body["order_id"] == order_id
+        assert body["order_item_id"] == ITEM_ID_1
         assert body["refund_id"] == "REF-123"
         assert body["status"] == "approved"
         assert body["amount"] == 100.00
 
-        # Verify DB updated
+        # All items refunded → payment should be REFUNDED
         payment = db_session.query(Payment).filter(
             Payment.order_id == uuid.UUID(order_id)
         ).first()
-        assert payment.status == PaymentStatus.CANCELED
+        assert payment.status == PaymentStatus.REFUNDED
+        assert payment.items[0]["refunded"] is True
 
-    def test_partial_refund_success(
+    def test_partial_refund_leaves_payment_approved(
         self,
         client: TestClient,
         httpx_mock: HTTPXMock,
         db_session: Session,
     ) -> None:
-        """A partial refund request sends amount to MercadoPago."""
+        """Refunding one item out of two keeps payment in APPROVED; only that item is marked refunded."""
+        import copy
         order_id = str(uuid.uuid4())
-        _create_approved_payment(db_session, order_id)
+        _create_payment(db_session, order_id, items=copy.deepcopy(_TWO_ITEMS))
 
-        # Mock MercadoPago refund endpoint
+        # Refund item 1: 2 × 50.00 = 100.00
         httpx_mock.add_response(
             url="https://api.mercadopago.com/v1/payments/MP-PAY-12345/refunds",
             method="POST",
-            json={
-                "id": "REF-456",
-                "payment_id": 12345,
-                "amount": 50.00,
-                "status": "approved",
-            },
+            json=_mp_refund_response(100.00, "REF-PARTIAL"),
             status_code=201,
         )
 
         response = client.post(
             f"/payments/{order_id}/refund",
-            json={"amount": 50.00},
+            json={"order_item_id": ITEM_ID_1},
         )
 
         assert response.status_code == 200
         body = response.json()
-        assert body["refund_id"] == "REF-456"
-        assert body["amount"] == 50.00
+        assert body["order_item_id"] == ITEM_ID_1
+        assert body["amount"] == 100.00
 
-        # Verify DB updated to CANCELED (not REFUNDED, that happens on webhook)
+        # Only one item refunded → payment stays APPROVED
         payment = db_session.query(Payment).filter(
             Payment.order_id == uuid.UUID(order_id)
         ).first()
-        assert payment.status == PaymentStatus.CANCELED
+        assert payment.status == PaymentStatus.APPROVED
+        item_1 = next(i for i in payment.items if i["line_item_id"] == ITEM_ID_1)
+        item_2 = next(i for i in payment.items if i["line_item_id"] == ITEM_ID_2)
+        assert item_1["refunded"] is True
+        assert item_2.get("refunded") is not True
 
-    def test_refund_nonexistent_payment_returns_404(
+    def test_all_items_refunded_marks_payment_as_refunded(
         self,
         client: TestClient,
-    ) -> None:
-        """A refund request for nonexistent payment returns 404."""
-        order_id = str(uuid.uuid4())
-
-        response = client.post(
-            f"/payments/{order_id}/refund",
-            json={},
-        )
-
-        assert response.status_code == 404
-        assert "No payment found" in response.json()["detail"]
-
-    def test_refund_already_refunded_payment(
-        self,
-        client: TestClient,
+        httpx_mock: HTTPXMock,
         db_session: Session,
     ) -> None:
-        """A refund request for already refunded payment returns success without calling MP."""
+        """When all items are refunded the payment status becomes REFUNDED."""
+        import copy
         order_id = str(uuid.uuid4())
-        payment = Payment(
-            order_id=uuid.UUID(order_id),
-            idempotency_key=str(uuid.uuid4()),
-            amount=Decimal("100.00"),
-            items=[],
-            status=PaymentStatus.REFUNDED,
-            mp_preference_id="PREF-TEST",
-            mp_payment_id="MP-PAY-99999",
-        )
-        db_session.add(payment)
-        db_session.commit()
-        db_session.refresh(payment)
+        # Pre-mark item 1 as already refunded so only item 2 remains
+        items = copy.deepcopy(_TWO_ITEMS)
+        items[0]["refunded"] = True
+        _create_payment(db_session, order_id, items=items)
 
-        # Should not call MercadoPago
+        # Refund item 2: 1 × 80.00 = 80.00
+        httpx_mock.add_response(
+            url="https://api.mercadopago.com/v1/payments/MP-PAY-12345/refunds",
+            method="POST",
+            json=_mp_refund_response(80.00, "REF-LAST"),
+            status_code=201,
+        )
+
         response = client.post(
             f"/payments/{order_id}/refund",
-            json={},
+            json={"order_item_id": ITEM_ID_2},
         )
 
         assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "already_refunded"
-        assert body["order_id"] == order_id
+        assert response.json()["amount"] == 80.00
 
-    def test_refund_payment_without_mp_payment_id(
+        payment = db_session.query(Payment).filter(
+            Payment.order_id == uuid.UUID(order_id)
+        ).first()
+        assert payment.status == PaymentStatus.REFUNDED
+
+    # ── Error cases ────────────────────────────────────────────────────────
+
+    def test_missing_order_item_id_returns_422(
+        self,
+        client: TestClient,
+    ) -> None:
+        """Omitting order_item_id from the body triggers Pydantic validation → 422."""
+        order_id = str(uuid.uuid4())
+        response = client.post(f"/payments/{order_id}/refund", json={})
+        assert response.status_code == 422
+
+    def test_payment_not_found_returns_404(
+        self,
+        client: TestClient,
+    ) -> None:
+        """Refund request for an order with no payment returns 404."""
+        order_id = str(uuid.uuid4())
+        response = client.post(
+            f"/payments/{order_id}/refund",
+            json={"order_item_id": ITEM_ID_1},
+        )
+        assert response.status_code == 404
+        assert "No payment found" in response.json()["detail"]
+
+    def test_item_not_in_payment_returns_404(
         self,
         client: TestClient,
         db_session: Session,
     ) -> None:
-        """A refund request for payment without mp_payment_id fails."""
+        """Refund request for an item that doesn't exist in the payment returns 404."""
         order_id = str(uuid.uuid4())
-        payment = Payment(
-            order_id=uuid.UUID(order_id),
-            idempotency_key=str(uuid.uuid4()),
-            amount=Decimal("100.00"),
-            items=[],
-            status=PaymentStatus.APPROVED,
-            mp_preference_id="PREF-TEST",
-            mp_payment_id=None,  # No payment ID
-        )
-        db_session.add(payment)
-        db_session.commit()
+        _create_payment(db_session, order_id)
 
         response = client.post(
             f"/payments/{order_id}/refund",
-            json={},
+            json={"order_item_id": "item-does-not-exist"},
+        )
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+    def test_item_already_refunded_returns_409(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ) -> None:
+        """Attempting to refund an already-refunded item returns 409 Conflict."""
+        import copy
+        order_id = str(uuid.uuid4())
+        items = copy.deepcopy(_SINGLE_ITEM)
+        items[0]["refunded"] = True
+        _create_payment(db_session, order_id, items=items)
+
+        response = client.post(
+            f"/payments/{order_id}/refund",
+            json={"order_item_id": ITEM_ID_1},
+        )
+
+        assert response.status_code == 409
+        assert "already been refunded" in response.json()["detail"]
+
+    def test_payment_not_approved_returns_422(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ) -> None:
+        """Refund on a PENDING payment returns 422 Unprocessable Entity."""
+        order_id = str(uuid.uuid4())
+        _create_payment(db_session, order_id, status=PaymentStatus.PENDING)
+
+        response = client.post(
+            f"/payments/{order_id}/refund",
+            json={"order_item_id": ITEM_ID_1},
+        )
+
+        assert response.status_code == 422
+        assert "PENDING" in response.json()["detail"]
+
+    def test_payment_rejected_returns_422(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ) -> None:
+        """Refund on a REJECTED payment returns 422."""
+        order_id = str(uuid.uuid4())
+        _create_payment(db_session, order_id, status=PaymentStatus.REJECTED)
+
+        response = client.post(
+            f"/payments/{order_id}/refund",
+            json={"order_item_id": ITEM_ID_1},
+        )
+
+        assert response.status_code == 422
+
+    def test_payment_without_mp_payment_id_returns_502(
+        self,
+        client: TestClient,
+        db_session: Session,
+    ) -> None:
+        """Payment without an mp_payment_id cannot be refunded → 502."""
+        order_id = str(uuid.uuid4())
+        _create_payment(db_session, order_id, mp_payment_id=None)
+
+        response = client.post(
+            f"/payments/{order_id}/refund",
+            json={"order_item_id": ITEM_ID_1},
         )
 
         assert response.status_code == 502
         assert "MercadoPago" in response.json()["detail"]
 
+    def test_mercadopago_error_returns_502(
+        self,
+        client: TestClient,
+        httpx_mock: HTTPXMock,
+        db_session: Session,
+    ) -> None:
+        """When MercadoPago returns an error the payment state is NOT modified."""
+        import httpx as _httpx
+        order_id = str(uuid.uuid4())
+        _create_payment(db_session, order_id)
+
+        httpx_mock.add_response(
+            url="https://api.mercadopago.com/v1/payments/MP-PAY-12345/refunds",
+            method="POST",
+            status_code=500,
+        )
+
+        response = client.post(
+            f"/payments/{order_id}/refund",
+            json={"order_item_id": ITEM_ID_1},
+        )
+
+        assert response.status_code == 502
+
+        # Payment should remain APPROVED and item should NOT be marked refunded
+        payment = db_session.query(Payment).filter(
+            Payment.order_id == uuid.UUID(order_id)
+        ).first()
+        assert payment.status == PaymentStatus.APPROVED
+        assert payment.items[0].get("refunded") is not True
+
+
+# ── Webhook tests (unchanged behavior) ────────────────────────────────────
+
 
 class TestRefundWebhook:
-    """Tests for handling refund webhooks from MercadoPago."""
+    """Tests for handling refund webhooks from MercadoPago.
+
+    These tests validate that a ``refunded`` status from MP correctly
+    updates the local payment to REFUNDED via the webhook flow.
+    """
 
     def test_refund_status_updates_payment_to_refunded(
         self,
@@ -238,7 +411,6 @@ class TestRefundWebhook:
         from tests.test_webhook import _generate_valid_signature
         signature = _generate_valid_signature(mp_payment_id, settings.MP_WEBHOOK_SECRET)
 
-        # Send refund webhook
         response = client.post(
             "/payments/mp-webhook",
             json={"action": "payment.updated", "data": {"id": mp_payment_id}},

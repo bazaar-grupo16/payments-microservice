@@ -86,7 +86,7 @@ class TestGetPaymentStatus:
             "/payments/preferences",
             json={
                 "order_id": order_id,
-                "items": [{"title": "Saga Item", "quantity": 1, "unit_price": 100.0}],
+                "items": [{"title": "Saga Item", "quantity": 1, "unit_price": 100.0, "line_item_id": "item-saga-1"}],
             },
             headers={"Idempotency-Key": idemp_key},
         )

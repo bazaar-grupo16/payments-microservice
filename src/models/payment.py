@@ -33,7 +33,15 @@ class PaymentStatus(str, enum.Enum):
 
 
 class Payment(Base):
-    """Persistent representation of a MercadoPago payment intent."""
+    """Persistent representation of a MercadoPago payment intent.
+
+    The ``items`` JSON column stores a list of dicts, each with:
+    - ``title`` (str)
+    - ``quantity`` (int)
+    - ``unit_price`` (float)
+    - ``line_item_id`` (str) — unique identifier for the item within the order
+    - ``refunded`` (bool, default False) — True when this item has been refunded
+    """
 
     __tablename__ = "payments"
 

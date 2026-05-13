@@ -116,3 +116,48 @@ def update_status(
         mp_payment_id,
     )
     return payment
+
+
+def mark_item_as_refunded(
+    db: Session,
+    payment: Payment,
+    order_item_id: str,
+) -> Payment:
+    """Mark a specific item as refunded within the payment's JSON items list.
+
+    Uses ``flag_modified`` to ensure SQLAlchemy detects the mutation of the
+    JSON column and persists it on the next commit.
+
+    Parameters
+    ----------
+    db:
+        Active SQLAlchemy session.
+    payment:
+        The payment record to update.
+    order_item_id:
+        The ``line_item_id`` of the item to mark as refunded.
+
+    Returns
+    -------
+    Payment
+        The updated payment record.
+    """
+    import copy
+    from sqlalchemy.orm.attributes import flag_modified
+
+    updated_items = copy.deepcopy(payment.items or [])
+    for item in updated_items:
+        if item.get("line_item_id") == order_item_id:
+            item["refunded"] = True
+            break
+
+    payment.items = updated_items
+    flag_modified(payment, "items")
+    db.commit()
+    db.refresh(payment)
+    logger.info(
+        "Marked item %s as refunded in payment %s",
+        order_item_id,
+        payment.id,
+    )
+    return payment

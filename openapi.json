@@ -117,7 +117,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "502": {
             "content": {
@@ -315,8 +315,8 @@
         "tags": [
           "Payments"
         ],
-        "summary": "Solicita un reembolso de pago.",
-        "description": "Comunica con MercadoPago para reembolsar un pago y actualiza el estado local.",
+        "summary": "Solicita un reembolso de un \u00edtem de pago.",
+        "description": "Reembolsa un \u00edtem espec\u00edfico de la orden. Si todos los \u00edtems quedan reembolsados, el pago completo se marca como REFUNDED.",
         "operationId": "request_refund_payments__order_id__refund_post",
         "parameters": [
           {
@@ -351,6 +351,16 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -361,6 +371,26 @@
             },
             "description": "Not Found"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
           "502": {
             "content": {
               "application/json": {
@@ -370,16 +400,6 @@
               }
             },
             "description": "Bad Gateway"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       }
@@ -454,13 +474,19 @@
             "exclusiveMinimum": 0.0,
             "title": "Unit Price",
             "description": "Precio unitario del \u00edtem."
+          },
+          "line_item_id": {
+            "type": "string",
+            "title": "Line Item Id",
+            "description": "ID \u00fanico del \u00edtem dentro de la orden."
           }
         },
         "type": "object",
         "required": [
           "title",
           "quantity",
-          "unit_price"
+          "unit_price",
+          "line_item_id"
         ],
         "title": "Item",
         "description": "A single item within a preference request."
@@ -535,14 +561,16 @@
       },
       "RefundRequest": {
         "properties": {
-          "amount": {
-            "type": "number",
-            "exclusiveMinimum": 0.0,
-            "title": "Amount",
-            "description": "Monto a reembolsar. Si se omite, reembolso total."
+          "order_item_id": {
+            "type": "string",
+            "title": "Order Item Id",
+            "description": "ID del \u00edtem de la orden a reembolsar (line_item_id del item)."
           }
         },
         "type": "object",
+        "required": [
+          "order_item_id"
+        ],
         "title": "RefundRequest",
         "description": "Body for ``POST /payments/{order_id}/refund``."
       },
@@ -559,6 +587,11 @@
             "title": "Order Id",
             "description": "ID de la orden."
           },
+          "order_item_id": {
+            "type": "string",
+            "title": "Order Item Id",
+            "description": "ID del \u00edtem reembolsado."
+          },
           "status": {
             "type": "string",
             "title": "Status",
@@ -574,6 +607,7 @@
         "required": [
           "refund_id",
           "order_id",
+          "order_item_id",
           "status",
           "amount"
         ],

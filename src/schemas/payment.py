@@ -23,6 +23,9 @@ class Item(BaseModel):
     unit_price: float = Field(
         ..., gt=0, description="Precio unitario del ítem."
     )
+    line_item_id: str = Field(
+        ..., description="ID único del ítem dentro de la orden."
+    )
 
 
 # ── Requests ─────────────────────────────────────────────────
@@ -72,10 +75,9 @@ class PreferenceResponse(BaseModel):
 class RefundRequest(BaseModel):
     """Body for ``POST /payments/{order_id}/refund``."""
 
-    amount: float = Field(
-        default=None,
-        gt=0,
-        description="Monto a reembolsar. Si se omite, reembolso total.",
+    order_item_id: str = Field(
+        ...,
+        description="ID del ítem de la orden a reembolsar (line_item_id del item).",
     )
 
 
@@ -87,6 +89,9 @@ class RefundResponse(BaseModel):
     )
     order_id: UUID = Field(
         ..., description="ID de la orden."
+    )
+    order_item_id: str = Field(
+        ..., description="ID del ítem reembolsado."
     )
     status: str = Field(
         ..., description="Estado del reembolso."
