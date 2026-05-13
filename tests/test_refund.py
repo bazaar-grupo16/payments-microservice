@@ -328,7 +328,6 @@ class TestRefundByItem:
         db_session: Session,
     ) -> None:
         """When MercadoPago returns an error the payment state is NOT modified."""
-        import httpx as _httpx
         order_id = str(uuid.uuid4())
         _create_payment(db_session, order_id)
 
