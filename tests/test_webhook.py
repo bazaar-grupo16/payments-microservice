@@ -186,7 +186,7 @@ class TestWebhook:
         orders_req = next(r for r in requests if "orders" in str(r.url))
         import json
         body = json.loads(orders_req.content)
-        assert body == {"status": "SUCCESS", "transaction_id": data_id}
+        assert body == {"status": "APPROVED", "transaction_id": data_id}
 
 
     def test_webhook_pago_rechazado(

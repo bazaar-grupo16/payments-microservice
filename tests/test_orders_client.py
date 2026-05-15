@@ -32,7 +32,7 @@ class TestNotifyPaymentResult:
         # Verify correct payload was sent.
         request = httpx_mock.get_request()
         body = __import__("json").loads(request.content)
-        assert body == {"status": "SUCCESS", "transaction_id": "trans-123"}
+        assert body == {"status": "APPROVED", "transaction_id": "trans-123"}
 
     @pytest.mark.asyncio
     async def test_retries_on_transient_error(
