@@ -432,4 +432,4 @@ class TestRefundWebhook:
         orders_req = next(r for r in requests if "orders" in str(r.url))
         import json
         body = json.loads(orders_req.content)
-        assert body == {"status": "FAILED", "transaction_id": mp_payment_id}
+        assert body == {"status": "REFUNDED", "transaction_id": mp_payment_id}

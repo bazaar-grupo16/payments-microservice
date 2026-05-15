@@ -51,9 +51,8 @@ async def notify_payment_result(
         f"{settings.ORDERS_SERVICE_URL}/orders/"
         f"{order_id}/payment-webhook"
     )
-    mapped_status = "SUCCESS" if status == "APPROVED" else "FAILED"
     payload = {
-        "status": mapped_status,
+        "status": status,
         "transaction_id": transaction_id,
     }
 
