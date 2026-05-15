@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 from src.models.payment import Payment
 
 _VALID_ITEMS = [
-    {"title": "Producto A", "quantity": 2, "unit_price": 50.0},
-    {"title": "Producto B", "quantity": 1, "unit_price": 100.0},
+    {"title": "Producto A", "quantity": 2, "unit_price": 50.0, "line_item_id": "item-producto-a"},
+    {"title": "Producto B", "quantity": 1, "unit_price": 100.0, "line_item_id": "item-producto-b"},
 ]
 
 

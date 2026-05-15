@@ -12,7 +12,13 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
-from src.exceptions import MercadoPagoError, PaymentNotFoundError
+from src.exceptions import (
+    MercadoPagoError,
+    PaymentItemAlreadyRefundedError,
+    PaymentItemNotFoundError,
+    PaymentNotFoundError,
+    PaymentNotRefundableError,
+)
 from src.repositories import payment_repository as repo
 from src.schemas.payment import (
     PaymentStatusResponse,
@@ -22,7 +28,7 @@ from src.services import mercadopago_client as mp_client
 from src.services import orders_client
 from src.services.webhook_validator import validate_webhook_signature
 from src.core.config import get_settings
-from src.models.payment import PaymentStatus
+from src.models.payment import Payment, PaymentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +286,10 @@ async def process_webhook(
         )
         return
 
+    if "partially_refunded" in str(payload.get("status_detail", "")).lower():
+        _confirm_refunded_items(db, payment)
+        
+
     if payment.status != new_status:
         repo.update_status(
             db,
@@ -300,6 +310,40 @@ async def process_webhook(
                 order_id,
                 data_id,
             )
+
+
+async def _confirm_refunded_items(
+    db: Session,
+    payment: Payment
+) -> None:
+    """Mark items as refunded in the DB and propagate to orders service
+    when we receive a partially_refunded status."""
+    payment_id = payment.id
+    items = payment.items or []
+    
+    for item in items:
+        if item.get("refunded") is True:
+            refund_id = item.get("refund_id", None)
+            
+            if refund_id is None:
+                continue
+            
+            status = await mp_client.get_refund_status(
+                payment_id=str(payment_id),
+                refund_id=refund_id,
+            )
+            
+            if status != "approved":
+                continue
+            
+            order_item_id = item.get("line_item_id")
+            if order_item_id:
+                await orders_client.notify_refund_result(
+                    order_id=str(payment.order_id),
+                    order_item_id=order_item_id,
+                    refund_status="approved",
+                )
+            
 
 
 async def process_debug_webhook(
@@ -342,63 +386,103 @@ async def request_refund(
     db: Session,
     *,
     order_id: UUID,
-    amount: float | None = None,
+    order_item_id: str,
 ) -> dict:
-    """Request a refund for a payment.
+    """Request a refund for a specific item within a payment.
 
     Parameters
     ----------
     db:
         Active SQLAlchemy session.
     order_id:
-        Order UUID to refund.
-    amount:
-        Optional refund amount. If None, full refund is requested.
+        Order UUID whose payment will be partially refunded.
+    order_item_id:
+        The ``line_item_id`` of the specific item to refund.
 
     Returns
     -------
     dict
-        Contains information about the refund request.
+        Contains information about the refund: refund_id, order_id,
+        order_item_id, status, and amount.
 
     Raises
     ------
     PaymentNotFoundError
         If no payment record exists for the given order.
+    PaymentNotRefundableError
+        If the payment is not in APPROVED status.
+    PaymentItemNotFoundError
+        If the item is not found within the payment.
+    PaymentItemAlreadyRefundedError
+        If the item has already been refunded.
     MercadoPagoError
         If the MercadoPago API call fails.
     """
+    # 1. Find the payment
     payment = repo.get_by_order_id(db, order_id)
     if not payment:
         logger.warning("No payment found for order_id=%s", order_id)
         raise PaymentNotFoundError(f"No payment found for order {order_id}")
 
-    # Check if already refunded
-    if payment.status == PaymentStatus.REFUNDED:
+    # 2. Validate that the payment can be refunded
+    if payment.status != PaymentStatus.APPROVED:
         logger.info(
-            "Payment %s already refunded, skipping",
+            "Payment %s is in status %s — not refundable",
+            payment.id,
+            payment.status.value,
+        )
+        raise PaymentNotRefundableError(
+            f"Payment is in status '{payment.status.value}' and cannot be refunded. "
+            "Only APPROVED payments can be refunded."
+        )
+
+    # 3. Find the specific item within the payment
+    items = payment.items or []
+    target_item = next(
+        (item for item in items if item.get("line_item_id") == order_item_id),
+        None,
+    )
+    if target_item is None:
+        logger.warning(
+            "Item %s not found in payment %s",
+            order_item_id,
             payment.id,
         )
-        return {
-            "refund_id": payment.mp_payment_id,
-            "order_id": str(order_id),
-            "status": "already_refunded",
-            "amount": float(payment.amount) if payment.amount else None,
-        }
+        raise PaymentItemNotFoundError(
+            f"Item '{order_item_id}' not found in payment for order {order_id}"
+        )
 
-    # Request refund from MercadoPago
+    # 4. Check if the item was already refunded
+    if target_item.get("refunded") is True:
+        logger.info(
+            "Item %s in payment %s was already refunded",
+            order_item_id,
+            payment.id,
+        )
+        raise PaymentItemAlreadyRefundedError(
+            f"Item '{order_item_id}' has already been refunded"
+        )
+
+    # 5. Ensure the payment has a MercadoPago payment ID
     if not payment.mp_payment_id:
         logger.error(
             "Cannot refund payment %s — no mp_payment_id",
             payment.id,
         )
-        raise MercadoPagoError(
-            "Payment has no MercadoPago payment ID"
-        )
+        raise MercadoPagoError("Payment has no MercadoPago payment ID")
 
+    # 6. Calculate the amount for this item
+    amount = float(
+        Decimal(str(target_item["quantity"])) * Decimal(str(target_item["unit_price"]))
+    )
+
+    # 7. Build idempotency key and call MercadoPago
+    idempotency_key = f"{order_id}-{order_item_id}"
     try:
         refund_data = await mp_client.create_refund(
             payment.mp_payment_id,
             amount=amount,
+            idempotency_key=idempotency_key,
         )
     except httpx.HTTPStatusError as exc:
         logger.error(
@@ -410,16 +494,26 @@ async def request_refund(
             f"MercadoPago refund failed: {exc.response.status_code}"
         ) from exc
 
-    # Update payment status to CANCELED
-    repo.update_status(
-        db,
-        payment,
-        status=PaymentStatus.CANCELED,
-        mp_payment_id=payment.mp_payment_id,
-    )
+    # 8. Mark the item as refunded in the DB
+    payment = repo.mark_item_as_refunded(db, payment, order_item_id, refund_data.get("id", None))
+
+    # 9. If all items are now refunded, mark the full payment as REFUNDED
+    all_refunded = all(item.get("refunded") is True for item in (payment.items or []))
+    if all_refunded:
+        repo.update_status(
+            db,
+            payment,
+            status=PaymentStatus.REFUNDED,
+            mp_payment_id=payment.mp_payment_id,
+        )
+        logger.info(
+            "All items refunded — payment %s marked as REFUNDED",
+            payment.id,
+        )
 
     logger.info(
-        "Refund requested for payment %s — refund_id=%s",
+        "Refund requested for item %s in payment %s — refund_id=%s",
+        order_item_id,
         payment.id,
         refund_data.get("id"),
     )
@@ -427,6 +521,7 @@ async def request_refund(
     return {
         "refund_id": str(refund_data.get("id")),
         "order_id": str(order_id),
+        "order_item_id": order_item_id,
         "status": refund_data.get("status", "pending"),
         "amount": refund_data.get("amount"),
     }

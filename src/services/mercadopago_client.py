@@ -154,6 +154,7 @@ async def create_refund(
     payment_id: str,
     *,
     amount: float | None = None,
+    idempotency_key: str,
     http_client: httpx.AsyncClient | None = None,
 ) -> dict:
     """Request a refund for a payment from MercadoPago.
@@ -164,6 +165,9 @@ async def create_refund(
         The MercadoPago payment ID to refund.
     amount:
         Optional refund amount. If ``None``, full refund is requested.
+    idempotency_key:
+        Unique key to guarantee idempotency of the refund request.
+        Should be built by the caller as ``{order_id}-{order_item_id}``.
     http_client:
         Optional injected client for testing.
 
@@ -182,7 +186,7 @@ async def create_refund(
     headers = {
         "Authorization": f"Bearer {settings.MP_ACCESS_TOKEN}",
         "Content-Type": "application/json",
-        "X-Idempotency-Key": f"refund-{payment_id}-{amount or 'full'}",
+        "X-Idempotency-Key": idempotency_key,
     }
     
     payload = {}
@@ -211,3 +215,55 @@ async def create_refund(
         data.get("amount"),
     )
     return data
+
+async def get_refund_status(
+    payment_id: str,
+    refund_id: str,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> str:
+    """Fetch refund details from MercadoPago by payment ID and refund ID.
+
+    Parameters
+    ----------
+    payment_id:
+        The MercadoPago payment ID associated with the refund.
+    refund_id:
+        The MercadoPago refund ID to fetch.
+    http_client:
+        Optional injected client for testing.
+
+    Returns
+    -------
+    str
+        Refund status string from MercadoPago (or empty string if absent).
+
+    Raises
+    ------
+    httpx.HTTPStatusError
+        If MercadoPago returns a non-2xx status.
+    """
+    settings = get_settings()
+    headers = {"Authorization": f"Bearer {settings.MP_ACCESS_TOKEN}"}
+
+    client = http_client or httpx.AsyncClient()
+    try:
+        response = await client.get(
+            f"{_MP_BASE_URL}/v1/payments/{payment_id}/refunds/{refund_id}",
+            headers=headers,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    finally:
+        if http_client is None:
+            await client.aclose()
+
+    data = response.json()
+    status = data.get("status") or ""
+    logger.info(
+        "Fetched MP refund %s for payment %s — status=%s",
+        refund_id,
+        payment_id,
+        status,
+    )
+    return status
