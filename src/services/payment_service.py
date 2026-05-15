@@ -28,7 +28,7 @@ from src.services import mercadopago_client as mp_client
 from src.services import orders_client
 from src.services.webhook_validator import validate_webhook_signature
 from src.core.config import get_settings
-from src.models.payment import PaymentStatus
+from src.models.payment import Payment, PaymentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +286,10 @@ async def process_webhook(
         )
         return
 
+    if "partially_refunded" in str(payload.get("status_detail", "")).lower():
+        _confirm_refunded_items(db, payment)
+        
+
     if payment.status != new_status:
         repo.update_status(
             db,
@@ -306,6 +310,40 @@ async def process_webhook(
                 order_id,
                 data_id,
             )
+
+
+async def _confirm_refunded_items(
+    db: Session,
+    payment: Payment
+) -> None:
+    """Mark items as refunded in the DB and propagate to orders service
+    when we receive a partially_refunded status."""
+    payment_id = payment.id
+    items = payment.items or []
+    
+    for item in items:
+        if item.get("refunded") is True:
+            refund_id = item.get("refund_id", None)
+            
+            if refund_id is None:
+                continue
+            
+            status = await mp_client.get_refund_status(
+                payment_id=str(payment_id),
+                refund_id=refund_id,
+            )
+            
+            if status != "approved":
+                continue
+            
+            order_item_id = item.get("line_item_id")
+            if order_item_id:
+                await orders_client.notify_refund_result(
+                    order_id=str(payment.order_id),
+                    order_item_id=order_item_id,
+                    refund_status="approved",
+                )
+            
 
 
 async def process_debug_webhook(
@@ -457,7 +495,7 @@ async def request_refund(
         ) from exc
 
     # 8. Mark the item as refunded in the DB
-    payment = repo.mark_item_as_refunded(db, payment, order_item_id)
+    payment = repo.mark_item_as_refunded(db, payment, order_item_id, refund_data.get("id", None))
 
     # 9. If all items are now refunded, mark the full payment as REFUNDED
     all_refunded = all(item.get("refunded") is True for item in (payment.items or []))

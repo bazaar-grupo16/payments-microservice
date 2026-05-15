@@ -122,6 +122,7 @@ def mark_item_as_refunded(
     db: Session,
     payment: Payment,
     order_item_id: str,
+    refund_id: str | None = None,
 ) -> Payment:
     """Mark a specific item as refunded within the payment's JSON items list.
 
@@ -136,6 +137,8 @@ def mark_item_as_refunded(
         The payment record to update.
     order_item_id:
         The ``line_item_id`` of the item to mark as refunded.
+    refund_id:
+        The ID of the refund associated with this item.
 
     Returns
     -------
@@ -149,6 +152,8 @@ def mark_item_as_refunded(
     for item in updated_items:
         if item.get("line_item_id") == order_item_id:
             item["refunded"] = True
+            if refund_id is not None:
+                item["refund_id"] = refund_id
             break
 
     payment.items = updated_items
