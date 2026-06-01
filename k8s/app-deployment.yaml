@@ -14,6 +14,9 @@ spec:
       app: payments-service
   template:
     metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
       labels:
         app: payments-service
     spec:
@@ -76,7 +79,16 @@ spec:
                 secretKeyRef:
                   name: payments-service-credentials
                   key: BAZAAR_BASE_URL
-          # ── Probes ─────────────────────────────────
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            - name: OTEL_SERVICE_NAME
+              value: payments-service
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=dev,k8s.cluster.name=bazaar-dev"
+            - name: OTEL_PROPAGATORS
+              value: "tracecontext,baggage"
           livenessProbe:
             httpGet:
               path: /livez

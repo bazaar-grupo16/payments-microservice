@@ -11,6 +11,7 @@ import asyncio
 import httpx
 
 from src.core.config import get_settings
+from src.core.observability import build_observability_headers
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,10 @@ async def notify_payment_result(
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 response = await client.post(
-                    url, json=payload, timeout=10.0
+                    url,
+                    json=payload,
+                    headers=build_observability_headers(),
+                    timeout=10.0,
                 )
                 response.raise_for_status()
                 logger.info(
@@ -143,7 +147,10 @@ async def notify_refund_result(
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 response = await client.post(
-                    url, json=payload, timeout=10.0
+                    url,
+                    json=payload,
+                    headers=build_observability_headers(),
+                    timeout=10.0,
                 )
                 response.raise_for_status()
                 logger.info(

@@ -254,7 +254,7 @@ async def request_refund(
     "/{order_id}/cancel",
     status_code=status.HTTP_200_OK,
     summary="Cancela un pago pendiente.",
-    responses_model=OrderCancellationResponse,
+    response_model=OrderCancellationResponse,
     description=(
         "Permite cancelar un pago que aún no ha sido aprobado. "
         "Si el pago ya fue aprobado, devuelve un error."

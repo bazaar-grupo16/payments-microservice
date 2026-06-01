@@ -35,6 +35,13 @@ services:
       MP_WEBHOOK_SECRET: test_webhook_secret
       # ── Internal Services (dummy for tests) ───────
       ORDERS_SERVICE_URL: http://orders-service:8000
+      OTEL_SERVICE_NAME: payments
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=test,k8s.cluster.name=bazaar-dev
+      OTEL_PROPAGATORS: tracecontext,baggage
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      OTEL_TRACES_SAMPLER: always_on
     depends_on:
       db:
         condition: service_healthy
