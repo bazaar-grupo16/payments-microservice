@@ -14,6 +14,9 @@ spec:
       app: payments-db
   template:
     metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5432"
       labels:
         app: payments-db
     spec:
@@ -41,7 +44,16 @@ spec:
                   key: DB_NAME
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
-          # ── Probes ─────────────────────────────────
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            - name: OTEL_SERVICE_NAME
+              value: payments-db
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=dev,k8s.cluster.name=bazaar-dev"
+            - name: OTEL_PROPAGATORS
+              value: "tracecontext,baggage"
           livenessProbe:
             exec:
               command:

@@ -26,6 +26,7 @@ from src.schemas.payment import (
     DebugPaymentRequest,
     RefundRequest,
     RefundResponse,
+    OrderCancellationResponse,
 )
 from src.services import payment_service
 
@@ -245,5 +246,35 @@ async def request_refund(
         logger.error("MercadoPago refund error: %s", exc.detail)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=exc.detail,
+        ) from exc
+
+
+@router.put(
+    "/{order_id}/cancel",
+    status_code=status.HTTP_200_OK,
+    summary="Cancela un pago pendiente.",
+    response_model=OrderCancellationResponse,
+    description=(
+        "Permite cancelar un pago que aún no ha sido aprobado. "
+        "Si el pago ya fue aprobado, devuelve un error."
+    ),
+)
+async def cancel_payment(
+    order_id: UUID,
+    db: DbSession,
+) -> OrderCancellationResponse:
+    """Cancel a pending payment."""
+    try:
+        result = await payment_service.cancel_payment(db, order_id)
+        return OrderCancellationResponse(**result)
+    except PaymentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=exc.detail,
+        ) from exc
+    except PaymentNotRefundableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=exc.detail,
         ) from exc

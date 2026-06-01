@@ -100,6 +100,16 @@ class RefundResponse(BaseModel):
         ..., description="Monto reembolsado."
     )
 
+class OrderCancellationResponse(BaseModel):
+    """Response for a successful order cancellation."""
+
+    order_id: UUID = Field(
+        ..., description="ID de la orden cancelada."
+    )
+    status: str = Field(
+        ..., description="Estado del pago después de la cancelación."
+    )
+
 
 class PaymentStatusResponse(BaseModel):
     """Response for ``GET /payments/{order_id}/status``."""

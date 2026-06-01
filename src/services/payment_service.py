@@ -99,6 +99,17 @@ async def create_preference(
             "Idempotency hit for key=%s — returning cached preference",
             idempotency_key,
         )
+
+        # Note: we return the previously stored init_point without calling MP again.
+        # If payment has been cancelled, the preference should not be returned
+        if existing.status == PaymentStatus.CANCELED:
+            logger.info(
+                "Payment for idempotency key=%s is canceled — not returning preference",
+                idempotency_key,
+            )
+            raise PaymentNotRefundableError(
+                "Payment was canceled and cannot be retried."
+            )
         return PreferenceResponse(
             preference_id=existing.mp_preference_id,
             init_point=existing.init_point,
@@ -524,4 +535,67 @@ async def request_refund(
         "order_item_id": order_item_id,
         "status": refund_data.get("status", "pending"),
         "amount": refund_data.get("amount"),
+    }
+
+
+async def cancel_payment(
+    db: Session,
+    *,
+    order_id: UUID,
+) -> dict:
+    """Cancel a pending payment.
+
+    Parameters
+    ----------
+    db:
+        Active SQLAlchemy session.
+    order_id:
+        Order UUID whose payment will be canceled. Only payments in PENDING status can be canceled.
+    Returns
+    -------
+    dict
+        Contains information about the cancellation: order_id and new payment status.
+    Raises
+    ------
+    PaymentNotFoundError
+        If no payment record exists for the given order.
+    PaymentNotRefundableError
+        If the payment is not in PENDING status and therefore cannot be canceled.
+    MercadoPagoError
+        If the MercadoPago API call fails during cancellation.
+    """
+    # 1. Find the payment
+    payment = repo.get_by_order_id(db, order_id)
+    if not payment:
+        logger.warning("No payment found for order_id=%s", order_id)
+        raise PaymentNotFoundError(f"No payment found for order {order_id}")
+
+    # 2. Validate that the payment can be canceled
+    if payment.status != PaymentStatus.PENDING:
+        logger.info(
+            "Payment %s is in status %s — cannot be canceled",
+            payment.id,
+            payment.status.value,
+        )
+        raise PaymentNotRefundableError(
+            f"Payment is in status '{payment.status.value}' and cannot be canceled. "
+            "Only PENDING payments can be canceled."
+        )
+    
+    # 3. Update payment status to CANCELED
+    repo.update_status(
+        db,
+        payment,
+        status=PaymentStatus.CANCELED,
+    )
+
+    logger.info(
+        "Payment %s for order %s has been canceled",
+        payment.id,
+        order_id,
+    )
+
+    return {
+        "order_id": str(order_id),
+        "payment_status": PaymentStatus.CANCELED.value,
     }
