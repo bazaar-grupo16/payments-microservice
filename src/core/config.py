@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # ── Internal Services ────────────────────────────
     ORDERS_SERVICE_URL: str
 
+    # ── Outbox Worker ────────────────────────────────
+    OUTBOX_WORKER_ENABLED: bool = True
+    OUTBOX_WORKER_INTERVAL_SECONDS: int = 10
+    OUTBOX_WORKER_BATCH_SIZE: int = 20
+    OUTBOX_MAX_ATTEMPTS: int = 5
+
     # ── Pydantic-settings config ─────────────────────
     model_config = SettingsConfigDict(
         env_file=".env",

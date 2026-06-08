@@ -25,10 +25,11 @@ from src.schemas.payment import (
     PreferenceResponse,
 )
 from src.services import mercadopago_client as mp_client
-from src.services import orders_client
 from src.services.webhook_validator import validate_webhook_signature
 from src.core.config import get_settings
 from src.models.payment import Payment, PaymentStatus
+from src.repositories import outbox_repository
+from src.services.outbox_worker import process_outbox_event_inline
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,7 @@ async def get_payment_status(
     )
 
 
+
 async def process_webhook(
     db: Session,
     *,
@@ -302,6 +304,19 @@ async def process_webhook(
         
 
     if payment.status != new_status:
+        payment.status = new_status
+        payment.mp_payment_id = str(data_id)
+
+        event = outbox_repository.insert(
+            db,
+            event_type="NOTIFY_PAYMENT_RESULT",
+            payload={
+                "order_id": str(order_id),
+                "status": new_status.value,
+                "transaction_id": str(data_id),
+            },
+        )
+
         repo.update_status(
             db,
             payment,
@@ -309,18 +324,7 @@ async def process_webhook(
             mp_payment_id=str(data_id),
         )
 
-        # 5. Notify Orders service
-        notified = await orders_client.notify_payment_result(
-            order_id=str(order_id),
-            status=new_status.value,
-            transaction_id=str(data_id),
-        )
-        if not notified:
-            logger.warning(
-                "Orders notification failed for order_id=%s transaction_id=%s",
-                order_id,
-                data_id,
-            )
+        await process_outbox_event_inline(db, event)
 
 
 async def _confirm_refunded_items(
@@ -349,11 +353,17 @@ async def _confirm_refunded_items(
             
             order_item_id = item.get("line_item_id")
             if order_item_id:
-                await orders_client.notify_refund_result(
-                    order_id=str(payment.order_id),
-                    order_item_id=order_item_id,
-                    refund_status="approved",
+                event = outbox_repository.insert(
+                    db,
+                    event_type="NOTIFY_REFUND_RESULT",
+                    payload={
+                        "order_id": str(payment.order_id),
+                        "order_item_id": order_item_id,
+                        "refund_status": "approved",
+                    },
                 )
+                db.commit()
+                await process_outbox_event_inline(db, event)
             
 
 
@@ -373,6 +383,19 @@ async def process_debug_webhook(
     transaction_id = "DEBUG-TX"
 
     if payment.status != new_status:
+        payment.status = new_status
+        payment.mp_payment_id = transaction_id
+
+        event = outbox_repository.insert(
+            db,
+            event_type="NOTIFY_PAYMENT_RESULT",
+            payload={
+                "order_id": str(operation_id),
+                "status": new_status.value,
+                "transaction_id": transaction_id,
+            },
+        )
+
         repo.update_status(
             db,
             payment,
@@ -380,17 +403,7 @@ async def process_debug_webhook(
             mp_payment_id=transaction_id,
         )
 
-        notified = await orders_client.notify_payment_result(
-            order_id=str(operation_id),
-            status=new_status.value,
-            transaction_id=transaction_id,
-        )
-        if not notified:
-            logger.warning(
-                "Orders notification failed for operation_id=%s transaction_id=%s",
-                operation_id,
-                transaction_id,
-            )
+        await process_outbox_event_inline(db, event)
 
 
 async def request_refund(
