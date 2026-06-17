@@ -9,15 +9,16 @@ import logging
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.payment import Payment, PaymentStatus
 
 logger = logging.getLogger(__name__)
 
 
-def create_payment(
-    db: Session,
+async def create_payment(
+    db: AsyncSession,
     *,
     order_id: UUID,
     idempotency_key: str,
@@ -32,8 +33,8 @@ def create_payment(
         items=items,
     )
     db.add(payment)
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
     logger.info(
         "Created payment %s for order %s (key=%s)",
         payment.id,
@@ -43,41 +44,40 @@ def create_payment(
     return payment
 
 
-def get_by_idempotency_key(db: Session, key: str) -> Payment | None:
+async def get_by_idempotency_key(db: AsyncSession, key: str) -> Payment | None:
     """Look up a payment by its idempotency key."""
-    return db.query(Payment).filter(Payment.idempotency_key == key).first()
+    stmt = select(Payment).filter(Payment.idempotency_key == key)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
-def get_by_order_id(db: Session, order_id: UUID) -> Payment | None:
+async def get_by_order_id(db: AsyncSession, order_id: UUID) -> Payment | None:
     """Look up the most recent payment for a given order."""
-    return (
-        db.query(Payment)
+    stmt = (
+        select(Payment)
         .filter(Payment.order_id == order_id)
         .order_by(Payment.created_at.desc())
-        .first()
     )
+    result = await db.execute(stmt)
+    return result.scalars().first()
 
 
-def get_by_mp_preference_id(db: Session, preference_id: str) -> Payment | None:
+async def get_by_mp_preference_id(db: AsyncSession, preference_id: str) -> Payment | None:
     """Look up a payment by its MercadoPago preference ID."""
-    return (
-        db.query(Payment)
-        .filter(Payment.mp_preference_id == preference_id)
-        .first()
-    )
+    stmt = select(Payment).filter(Payment.mp_preference_id == preference_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
-def get_by_mp_payment_id(db: Session, mp_payment_id: str) -> Payment | None:
+async def get_by_mp_payment_id(db: AsyncSession, mp_payment_id: str) -> Payment | None:
     """Look up a payment by its MercadoPago payment ID."""
-    return (
-        db.query(Payment)
-        .filter(Payment.mp_payment_id == mp_payment_id)
-        .first()
-    )
+    stmt = select(Payment).filter(Payment.mp_payment_id == mp_payment_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
-def update_with_preference(
-    db: Session,
+async def update_with_preference(
+    db: AsyncSession,
     payment: Payment,
     *,
     mp_preference_id: str,
@@ -86,8 +86,8 @@ def update_with_preference(
     """Store the MercadoPago preference details on an existing payment."""
     payment.mp_preference_id = mp_preference_id
     payment.init_point = init_point
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
     logger.info(
         "Updated payment %s with preference %s",
         payment.id,
@@ -96,8 +96,8 @@ def update_with_preference(
     return payment
 
 
-def update_status(
-    db: Session,
+async def update_status(
+    db: AsyncSession,
     payment: Payment,
     *,
     status: PaymentStatus,
@@ -107,8 +107,8 @@ def update_status(
     payment.status = status
     if mp_payment_id is not None:
         payment.mp_payment_id = mp_payment_id
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
     logger.info(
         "Payment %s status → %s (mp_payment_id=%s)",
         payment.id,
@@ -118,8 +118,8 @@ def update_status(
     return payment
 
 
-def mark_item_as_refunded(
-    db: Session,
+async def mark_item_as_refunded(
+    db: AsyncSession,
     payment: Payment,
     order_item_id: str,
     refund_id: str | None = None,
@@ -158,8 +158,8 @@ def mark_item_as_refunded(
 
     payment.items = updated_items
     flag_modified(payment, "items")
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
     logger.info(
         "Marked item %s as refunded in payment %s",
         order_item_id,

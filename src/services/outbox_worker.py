@@ -5,7 +5,8 @@ Background outbox worker to process events from the outbox_events table.
 import asyncio
 import logging
 from uuid import UUID
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import get_settings
 from src.core.database import SessionLocal
@@ -17,7 +18,7 @@ from src.core.utils import utc_now
 logger = logging.getLogger(__name__)
 
 
-async def dispatch_event(db: Session, event: OutboxEvent) -> None:
+async def dispatch_event(db: AsyncSession, event: OutboxEvent) -> None:
     """Dispatches the event and updates its database status based on outcome."""
     settings = get_settings()
     payload = event.payload or {}
@@ -46,7 +47,7 @@ async def dispatch_event(db: Session, event: OutboxEvent) -> None:
         # Success: mark DONE
         event.status = "DONE"
         event.processed_at = utc_now()
-        db.commit()
+        await db.commit()
         logger.info("Outbox event %s successfully processed", event.id)
         
     except Exception as exc:
@@ -63,10 +64,10 @@ async def dispatch_event(db: Session, event: OutboxEvent) -> None:
         else:
             event.status = "FAILED"
             event.processed_at = utc_now()
-        db.commit()
+        await db.commit()
 
 
-async def process_outbox_event_inline(db: Session, event: OutboxEvent) -> None:
+async def process_outbox_event_inline(db: AsyncSession, event: OutboxEvent) -> None:
     """Attempt to process the outbox event inline during the request.
     
     If it succeeds, status is set to DONE.
@@ -75,32 +76,28 @@ async def process_outbox_event_inline(db: Session, event: OutboxEvent) -> None:
     """
     event.status = "PROCESSING"
     event.locked_at = utc_now()
-    db.commit()
+    await db.commit()
     
     await dispatch_event(db, event)
 
 
-def _claim_batch_ids_sync() -> list[UUID]:
-    """Synchronous helper to claim a batch and return their UUIDs."""
-    db = SessionLocal()
-    try:
-        events = outbox_repository.claim_batch(db, get_settings().OUTBOX_WORKER_BATCH_SIZE)
+async def _claim_batch_ids() -> list[UUID]:
+    """Asynchronously claim a batch and return their UUIDs."""
+    async with SessionLocal() as db:
+        events = await outbox_repository.claim_batch(db, get_settings().OUTBOX_WORKER_BATCH_SIZE)
         return [e.id for e in events]
-    finally:
-        db.close()
 
 
 async def _process_single_event_by_id(event_id: UUID) -> None:
-    """Synchronous database fetch helper running on the main event loop,
+    """Asynchronous database fetch helper running on the main event loop,
     delegating event dispatch to the async dispatch_event function.
     """
-    db = SessionLocal()
-    try:
-        event = db.query(OutboxEvent).filter(OutboxEvent.id == event_id).first()
+    async with SessionLocal() as db:
+        stmt = select(OutboxEvent).filter(OutboxEvent.id == event_id)
+        result = await db.execute(stmt)
+        event = result.scalar_one_or_none()
         if event:
             await dispatch_event(db, event)
-    finally:
-        db.close()
 
 
 async def run_outbox_worker(limit_iterations: int | None = None) -> None:
@@ -119,8 +116,8 @@ async def run_outbox_worker(limit_iterations: int | None = None) -> None:
             await asyncio.sleep(settings.OUTBOX_WORKER_INTERVAL_SECONDS)
             
         try:
-            # Run the blocking database claim in a thread pool executor
-            event_ids = await asyncio.to_thread(_claim_batch_ids_sync)
+            # Run the database claim asynchronously
+            event_ids = await _claim_batch_ids()
             if event_ids:
                 logger.info("Outbox worker processing batch of %d events", len(event_ids))
                 for event_id in event_ids:

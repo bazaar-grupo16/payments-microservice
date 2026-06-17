@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         """Build the PostgreSQL connection DSN from individual fields."""
         return (
-            f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
+            f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         )
 

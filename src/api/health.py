@@ -40,7 +40,7 @@ async def livez() -> dict[str, str]:
 )
 async def readyz(response: Response) -> dict[str, str]:
     """Readiness probe — checks database connectivity."""
-    if check_db_connection():
+    if await check_db_connection():
         return {"status": "ready"}
 
     logger.error("Readiness check failed: database unreachable")

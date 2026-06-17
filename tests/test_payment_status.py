@@ -5,16 +5,16 @@ Integration tests for ``GET /payments/{order_id}/status``.
 import uuid
 from decimal import Decimal
 
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 from pytest_httpx import HTTPXMock
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.payment import Payment, PaymentStatus
 from src.core.config import get_settings
 from tests.test_webhook import _generate_valid_signature
 
 
-def _create_payment(db: Session, order_id: str, status: PaymentStatus = PaymentStatus.PENDING) -> Payment:
+async def _create_payment(db: AsyncSession, order_id: str, status: PaymentStatus = PaymentStatus.PENDING) -> Payment:
     """Helper to create a payment record in the DB."""
     payment = Payment(
         order_id=uuid.UUID(order_id),
@@ -24,47 +24,47 @@ def _create_payment(db: Session, order_id: str, status: PaymentStatus = PaymentS
         status=status,
     )
     db.add(payment)
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
     return payment
 
 
 class TestGetPaymentStatus:
     """Tests for ``GET /payments/{order_id}/status``."""
 
-    def test_get_existing_payment_status(
+    async def test_get_existing_payment_status(
         self,
-        client: TestClient,
-        db_session: Session,
+        async_client: AsyncClient,
+        db_session: AsyncSession,
     ) -> None:
         """Querying an existing payment returns 200 and the correct status."""
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id, PaymentStatus.APPROVED)
+        await _create_payment(db_session, order_id, PaymentStatus.APPROVED)
 
-        response = client.get(f"/payments/{order_id}/status")
+        response = await async_client.get(f"/payments/{order_id}/status")
 
         assert response.status_code == 200
         body = response.json()
         assert body["order_id"] == order_id
         assert body["payment_status"] == "APPROVED"
 
-    def test_get_nonexistent_payment_returns_404(
+    async def test_get_nonexistent_payment_returns_404(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
     ) -> None:
         """Querying a payment that does not exist returns 404."""
         order_id = str(uuid.uuid4())
 
-        response = client.get(f"/payments/{order_id}/status")
+        response = await async_client.get(f"/payments/{order_id}/status")
 
         assert response.status_code == 404
         assert "No payment found" in response.json()["detail"]
 
-    def test_full_saga_flow(
+    async def test_full_saga_flow(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """End-to-end test of the payment saga: Create -> Webhook -> Poll Status."""
         settings = get_settings()
@@ -82,7 +82,7 @@ class TestGetPaymentStatus:
         )
 
         # Create preference request
-        pref_response = client.post(
+        pref_response = await async_client.post(
             "/payments/preferences",
             json={
                 "order_id": order_id,
@@ -93,7 +93,7 @@ class TestGetPaymentStatus:
         assert pref_response.status_code == 201
 
         # Verify initial status is PENDING
-        status_response1 = client.get(f"/payments/{order_id}/status")
+        status_response1 = await async_client.get(f"/payments/{order_id}/status")
         assert status_response1.status_code == 200
         assert status_response1.json()["payment_status"] == "PENDING"
 
@@ -119,7 +119,7 @@ class TestGetPaymentStatus:
 
         # Send Webhook
         signature = _generate_valid_signature(data_id, settings.MP_WEBHOOK_SECRET)
-        webhook_response = client.post(
+        webhook_response = await async_client.post(
             "/payments/mp-webhook",
             json={"action": "payment.created", "data": {"id": data_id}},
             headers={
@@ -130,6 +130,6 @@ class TestGetPaymentStatus:
         assert webhook_response.status_code == 200
 
         # 3. Poll status again, should now be APPROVED
-        status_response2 = client.get(f"/payments/{order_id}/status")
+        status_response2 = await async_client.get(f"/payments/{order_id}/status")
         assert status_response2.status_code == 200
         assert status_response2.json()["payment_status"] == "APPROVED"

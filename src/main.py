@@ -35,9 +35,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     logger.info("Starting %s", settings.APP_NAME)
     # Wait for the database before creating tables.
-    wait_for_db()
+    await wait_for_db()
     # Create tables (dev convenience — use Alembic in production).
-    Base.metadata.create_all(bind=engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     
     worker_task = None
     if settings.OUTBOX_WORKER_ENABLED:

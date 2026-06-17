@@ -10,14 +10,16 @@ Tests the per-item refund endpoint, covering:
 - Payment not in APPROVED status → 422
 - Missing order_item_id in body → 422 (Pydantic validation)
 - No mp_payment_id on payment → 502
+- API failure on MercadoPago side → 502
 """
 
 import uuid
 from decimal import Decimal
 
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 from pytest_httpx import HTTPXMock
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.payment import Payment, PaymentStatus
 from src.core.config import get_settings
@@ -56,8 +58,8 @@ _TWO_ITEMS = [
 ]
 
 
-def _create_payment(
-    db: Session,
+async def _create_payment(
+    db: AsyncSession,
     order_id: str,
     *,
     status: PaymentStatus = PaymentStatus.APPROVED,
@@ -78,8 +80,8 @@ def _create_payment(
         mp_payment_id=mp_payment_id,
     )
     db.add(payment)
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
     return payment
 
 
@@ -98,15 +100,15 @@ def _mp_refund_response(amount: float, refund_id: str = "REF-123") -> dict:
 class TestRefundByItem:
     """Tests for ``POST /payments/{order_id}/refund``."""
 
-    def test_single_item_refund_success(
+    async def test_single_item_refund_success(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """Refunding the only item marks it as refunded and upgrades payment to REFUNDED."""
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id, items=list(_SINGLE_ITEM))
+        await _create_payment(db_session, order_id, items=list(_SINGLE_ITEM))
 
         # Expected amount: 2 × 50.00 = 100.00
         httpx_mock.add_response(
@@ -116,7 +118,7 @@ class TestRefundByItem:
             status_code=201,
         )
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
@@ -130,22 +132,22 @@ class TestRefundByItem:
         assert body["amount"] == 100.00
 
         # All items refunded → payment should be REFUNDED
-        payment = db_session.query(Payment).filter(
-            Payment.order_id == uuid.UUID(order_id)
-        ).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.REFUNDED
         assert payment.items[0]["refunded"] is True
 
-    def test_partial_refund_leaves_payment_approved(
+    async def test_partial_refund_leaves_payment_approved(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """Refunding one item out of two keeps payment in APPROVED; only that item is marked refunded."""
         import copy
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id, items=copy.deepcopy(_TWO_ITEMS))
+        await _create_payment(db_session, order_id, items=copy.deepcopy(_TWO_ITEMS))
 
         # Refund item 1: 2 × 50.00 = 100.00
         httpx_mock.add_response(
@@ -155,7 +157,7 @@ class TestRefundByItem:
             status_code=201,
         )
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
@@ -166,20 +168,20 @@ class TestRefundByItem:
         assert body["amount"] == 100.00
 
         # Only one item refunded → payment stays APPROVED
-        payment = db_session.query(Payment).filter(
-            Payment.order_id == uuid.UUID(order_id)
-        ).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.APPROVED
         item_1 = next(i for i in payment.items if i["line_item_id"] == ITEM_ID_1)
         item_2 = next(i for i in payment.items if i["line_item_id"] == ITEM_ID_2)
         assert item_1["refunded"] is True
         assert item_2.get("refunded") is not True
 
-    def test_all_items_refunded_marks_payment_as_refunded(
+    async def test_all_items_refunded_marks_payment_as_refunded(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """When all items are refunded the payment status becomes REFUNDED."""
         import copy
@@ -187,7 +189,7 @@ class TestRefundByItem:
         # Pre-mark item 1 as already refunded so only item 2 remains
         items = copy.deepcopy(_TWO_ITEMS)
         items[0]["refunded"] = True
-        _create_payment(db_session, order_id, items=items)
+        await _create_payment(db_session, order_id, items=items)
 
         # Refund item 2: 1 × 80.00 = 80.00
         httpx_mock.add_response(
@@ -197,7 +199,7 @@ class TestRefundByItem:
             status_code=201,
         )
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_2},
         )
@@ -205,45 +207,45 @@ class TestRefundByItem:
         assert response.status_code == 200
         assert response.json()["amount"] == 80.00
 
-        payment = db_session.query(Payment).filter(
-            Payment.order_id == uuid.UUID(order_id)
-        ).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.REFUNDED
 
     # ── Error cases ────────────────────────────────────────────────────────
 
-    def test_missing_order_item_id_returns_422(
+    async def test_missing_order_item_id_returns_422(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
     ) -> None:
         """Omitting order_item_id from the body triggers Pydantic validation → 422."""
         order_id = str(uuid.uuid4())
-        response = client.post(f"/payments/{order_id}/refund", json={})
+        response = await async_client.post(f"/payments/{order_id}/refund", json={})
         assert response.status_code == 422
 
-    def test_payment_not_found_returns_404(
+    async def test_payment_not_found_returns_404(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
     ) -> None:
         """Refund request for an order with no payment returns 404."""
         order_id = str(uuid.uuid4())
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
         assert response.status_code == 404
         assert "No payment found" in response.json()["detail"]
 
-    def test_item_not_in_payment_returns_404(
+    async def test_item_not_in_payment_returns_404(
         self,
-        client: TestClient,
-        db_session: Session,
+        async_client: AsyncClient,
+        db_session: AsyncSession,
     ) -> None:
         """Refund request for an item that doesn't exist in the payment returns 404."""
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id)
+        await _create_payment(db_session, order_id)
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": "item-does-not-exist"},
         )
@@ -251,19 +253,19 @@ class TestRefundByItem:
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
-    def test_item_already_refunded_returns_409(
+    async def test_item_already_refunded_returns_409(
         self,
-        client: TestClient,
-        db_session: Session,
+        async_client: AsyncClient,
+        db_session: AsyncSession,
     ) -> None:
         """Attempting to refund an already-refunded item returns 409 Conflict."""
         import copy
         order_id = str(uuid.uuid4())
         items = copy.deepcopy(_SINGLE_ITEM)
         items[0]["refunded"] = True
-        _create_payment(db_session, order_id, items=items)
+        await _create_payment(db_session, order_id, items=items)
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
@@ -271,16 +273,16 @@ class TestRefundByItem:
         assert response.status_code == 409
         assert "already been refunded" in response.json()["detail"]
 
-    def test_payment_not_approved_returns_422(
+    async def test_payment_not_approved_returns_422(
         self,
-        client: TestClient,
-        db_session: Session,
+        async_client: AsyncClient,
+        db_session: AsyncSession,
     ) -> None:
         """Refund on a PENDING payment returns 422 Unprocessable Entity."""
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id, status=PaymentStatus.PENDING)
+        await _create_payment(db_session, order_id, status=PaymentStatus.PENDING)
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
@@ -288,32 +290,32 @@ class TestRefundByItem:
         assert response.status_code == 422
         assert "PENDING" in response.json()["detail"]
 
-    def test_payment_rejected_returns_422(
+    async def test_payment_rejected_returns_422(
         self,
-        client: TestClient,
-        db_session: Session,
+        async_client: AsyncClient,
+        db_session: AsyncSession,
     ) -> None:
         """Refund on a REJECTED payment returns 422."""
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id, status=PaymentStatus.REJECTED)
+        await _create_payment(db_session, order_id, status=PaymentStatus.REJECTED)
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
 
         assert response.status_code == 422
 
-    def test_payment_without_mp_payment_id_returns_502(
+    async def test_payment_without_mp_payment_id_returns_502(
         self,
-        client: TestClient,
-        db_session: Session,
+        async_client: AsyncClient,
+        db_session: AsyncSession,
     ) -> None:
         """Payment without an mp_payment_id cannot be refunded → 502."""
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id, mp_payment_id=None)
+        await _create_payment(db_session, order_id, mp_payment_id=None)
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
@@ -321,15 +323,15 @@ class TestRefundByItem:
         assert response.status_code == 502
         assert "MercadoPago" in response.json()["detail"]
 
-    def test_mercadopago_error_returns_502(
+    async def test_mercadopago_error_returns_502(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """When MercadoPago returns an error the payment state is NOT modified."""
         order_id = str(uuid.uuid4())
-        _create_payment(db_session, order_id)
+        await _create_payment(db_session, order_id)
 
         httpx_mock.add_response(
             url="https://api.mercadopago.com/v1/payments/MP-PAY-12345/refunds",
@@ -337,7 +339,7 @@ class TestRefundByItem:
             status_code=500,
         )
 
-        response = client.post(
+        response = await async_client.post(
             f"/payments/{order_id}/refund",
             json={"order_item_id": ITEM_ID_1},
         )
@@ -345,9 +347,9 @@ class TestRefundByItem:
         assert response.status_code == 502
 
         # Payment should remain APPROVED and item should NOT be marked refunded
-        payment = db_session.query(Payment).filter(
-            Payment.order_id == uuid.UUID(order_id)
-        ).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.APPROVED
         assert payment.items[0].get("refunded") is not True
 
@@ -362,11 +364,11 @@ class TestRefundWebhook:
     updates the local payment to REFUNDED via the webhook flow.
     """
 
-    def test_refund_status_updates_payment_to_refunded(
+    async def test_refund_status_updates_payment_to_refunded(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """When MercadoPago sends refunded status via webhook, payment is updated to REFUNDED."""
         settings = get_settings()
@@ -384,7 +386,7 @@ class TestRefundWebhook:
             mp_payment_id=mp_payment_id,
         )
         db_session.add(payment)
-        db_session.commit()
+        await db_session.commit()
 
         # Mock MP get payment (returns refunded status)
         httpx_mock.add_response(
@@ -410,7 +412,7 @@ class TestRefundWebhook:
         from tests.test_webhook import _generate_valid_signature
         signature = _generate_valid_signature(mp_payment_id, settings.MP_WEBHOOK_SECRET)
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook",
             json={"action": "payment.updated", "data": {"id": mp_payment_id}},
             headers={
@@ -422,9 +424,10 @@ class TestRefundWebhook:
         assert response.status_code == 200
 
         # Verify DB updated to REFUNDED
-        payment = db_session.query(Payment).filter(
-            Payment.order_id == uuid.UUID(order_id)
-        ).first()
+        db_session.expire_all()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.REFUNDED
 
         # Verify Orders service was notified

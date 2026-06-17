@@ -7,10 +7,11 @@ import hashlib
 import uuid
 from decimal import Decimal
 
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 import pytest
 from pytest_httpx import HTTPXMock
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.payment import Payment, PaymentStatus
 from src.core.config import get_settings
@@ -29,7 +30,7 @@ def _generate_valid_signature(data_id: str, secret: str) -> str:
     return f"ts={ts},v1={v1}"
 
 
-def _create_test_payment(db: Session, order_id: str) -> Payment:
+async def _create_test_payment(db: AsyncSession, order_id: str) -> Payment:
     """Create a payment in PENDING state."""
     payment = Payment(
         order_id=uuid.UUID(order_id),
@@ -40,24 +41,24 @@ def _create_test_payment(db: Session, order_id: str) -> Payment:
         mp_preference_id="PREF-TEST",
     )
     db.add(payment)
-    db.commit()
-    db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
     return payment
 
 
 class TestWebhook:
     """Tests for ``POST /payments/mp-webhook``."""
 
-    def test_webhook_uses_query_param_data_id(
+    async def test_webhook_uses_query_param_data_id(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """MercadoPago signatures can be validated from the query string ID."""
         settings = get_settings()
         order_id = str(uuid.uuid4())
-        _create_test_payment(db_session, order_id)
+        await _create_test_payment(db_session, order_id)
         data_id = "payment-321"
 
         httpx_mock.add_response(
@@ -78,7 +79,7 @@ class TestWebhook:
 
         signature = _generate_valid_signature(data_id, settings.MP_WEBHOOK_SECRET)
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook?data.id=payment-321",
             json={"action": "payment.created", "data": {}},
             headers={
@@ -89,20 +90,22 @@ class TestWebhook:
 
         assert response.status_code == 200
 
-    def test_webhook_ignores_non_final_status(
+    async def test_webhook_ignores_non_final_status(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """Non-final MercadoPago statuses must not regress the payment."""
         settings = get_settings()
         order_id = str(uuid.uuid4())
-        _create_test_payment(db_session, order_id)
+        await _create_test_payment(db_session, order_id)
 
-        payment = db_session.query(Payment).filter(Payment.order_id == uuid.UUID(order_id)).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         payment.status = PaymentStatus.APPROVED
-        db_session.commit()
+        await db_session.commit()
 
         data_id = "payment-654"
         httpx_mock.add_response(
@@ -117,7 +120,7 @@ class TestWebhook:
 
         signature = _generate_valid_signature(data_id, settings.MP_WEBHOOK_SECRET)
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook",
             json={"data": {"id": data_id}},
             headers={
@@ -127,20 +130,22 @@ class TestWebhook:
         )
 
         assert response.status_code == 200
-        refreshed = db_session.query(Payment).filter(Payment.order_id == uuid.UUID(order_id)).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        refreshed = result.scalars().first()
         assert refreshed.status == PaymentStatus.APPROVED
         assert len(httpx_mock.get_requests()) == 1
 
-    def test_webhook_pago_aprobado(
+    async def test_webhook_pago_aprobado(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """A valid webhook with APPROVED status updates DB and notifies Orders."""
         settings = get_settings()
         order_id = str(uuid.uuid4())
-        _create_test_payment(db_session, order_id)
+        await _create_test_payment(db_session, order_id)
         data_id = "payment-123"
 
         # Mock MP getting payment info
@@ -164,7 +169,7 @@ class TestWebhook:
 
         signature = _generate_valid_signature(data_id, settings.MP_WEBHOOK_SECRET)
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook",
             json={"action": "payment.created", "data": {"id": data_id}},
             headers={
@@ -176,7 +181,9 @@ class TestWebhook:
         assert response.status_code == 200
 
         # Verify DB updated
-        payment = db_session.query(Payment).filter(Payment.order_id == uuid.UUID(order_id)).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.APPROVED
         assert payment.mp_payment_id == data_id
 
@@ -188,17 +195,16 @@ class TestWebhook:
         body = json.loads(orders_req.content)
         assert body == {"status": "APPROVED", "transaction_id": data_id}
 
-
-    def test_webhook_pago_rechazado(
+    async def test_webhook_pago_rechazado(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """A valid webhook with REJECTED status updates DB and notifies Orders."""
         settings = get_settings()
         order_id = str(uuid.uuid4())
-        _create_test_payment(db_session, order_id)
+        await _create_test_payment(db_session, order_id)
         data_id = "payment-456"
 
         # Mock MP getting payment info
@@ -222,7 +228,7 @@ class TestWebhook:
 
         signature = _generate_valid_signature(data_id, settings.MP_WEBHOOK_SECRET)
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook",
             json={"data": {"id": data_id}},
             headers={
@@ -233,16 +239,18 @@ class TestWebhook:
 
         assert response.status_code == 200
 
-        payment = db_session.query(Payment).filter(Payment.order_id == uuid.UUID(order_id)).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.REJECTED
 
     @pytest.mark.skip(reason="en development se aceptan firmas invalidas")
-    def test_webhook_firma_invalida(
+    async def test_webhook_firma_invalida(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
     ) -> None:
         """A webhook with an invalid signature is rejected."""
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook",
             json={"data": {"id": "123"}},
             headers={
@@ -253,17 +261,16 @@ class TestWebhook:
         assert response.status_code == 400
         assert "Invalid webhook signature" in response.json()["detail"]
 
-
-    def test_webhook_sin_headers_de_firma_se_procesa(
+    async def test_webhook_sin_headers_de_firma_se_procesa(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """MercadoPago simulator payloads without signature headers should still be accepted."""
         settings = get_settings()
         order_id = str(uuid.uuid4())
-        _create_test_payment(db_session, order_id)
+        await _create_test_payment(db_session, order_id)
         data_id = "123456"
 
         httpx_mock.add_response(
@@ -282,7 +289,7 @@ class TestWebhook:
             status_code=200,
         )
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook",
             json={
                 "action": "payment.updated",
@@ -298,10 +305,9 @@ class TestWebhook:
 
         assert response.status_code == 200
 
-
-    def test_webhook_pago_inexistente(
+    async def test_webhook_pago_inexistente(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
     ) -> None:
         """Webhook for a payment that doesn't exist locally still returns 200."""
@@ -316,13 +322,13 @@ class TestWebhook:
             json={
                 "id": 999,
                 "status": "approved",
-                "external_reference": order_id, # not in our DB
+                "external_reference": order_id,
             },
         )
 
         signature = _generate_valid_signature(data_id, settings.MP_WEBHOOK_SECRET)
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/mp-webhook",
             json={"data": {"id": data_id}},
             headers={
@@ -334,11 +340,11 @@ class TestWebhook:
         # We return 200 to acknowledge MP, even if we couldn't process it locally
         assert response.status_code == 200
 
-    def test_webhook_merchant_order_con_id_en_query_param(
+    async def test_webhook_merchant_order_con_id_en_query_param(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """Merchant Order webhooks with id in query param are processed correctly.
         
@@ -348,8 +354,8 @@ class TestWebhook:
         """
         settings = get_settings()
         order_id = str(uuid.uuid4())
-        _create_test_payment(db_session, order_id)
-        payment_id = "40765860436"  # This comes from the query param
+        await _create_test_payment(db_session, order_id)
+        payment_id = "40765860436"
 
         # Mock MP getting payment info
         httpx_mock.add_response(
@@ -372,8 +378,8 @@ class TestWebhook:
 
         signature = _generate_valid_signature(payment_id, settings.MP_WEBHOOK_SECRET)
 
-        # This simulates the webhook that was failing: ?id=40765860436&topic=merchant_order
-        response = client.post(
+        # This simulates the webhook: ?id=40765860436&topic=merchant_order
+        response = await async_client.post(
             f"/payments/mp-webhook?id={payment_id}&topic=merchant_order",
             json={
                 "action": "payment.updated",
@@ -390,6 +396,8 @@ class TestWebhook:
         assert response.status_code == 200
 
         # Verify DB updated
-        payment = db_session.query(Payment).filter(Payment.order_id == uuid.UUID(order_id)).first()
+        stmt = select(Payment).filter(Payment.order_id == uuid.UUID(order_id))
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment.status == PaymentStatus.APPROVED
         assert payment.mp_payment_id == payment_id

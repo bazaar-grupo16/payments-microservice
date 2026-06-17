@@ -8,9 +8,10 @@ Integration tests for ``POST /payments/preferences``.
 import json
 import uuid
 
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 from pytest_httpx import HTTPXMock
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.payment import Payment
 
@@ -31,11 +32,11 @@ def _mp_success_response(pref_id: str = "PREF-TEST-1") -> dict:
 class TestCreatePreference:
     """Tests for ``POST /payments/preferences``."""
 
-    def test_creates_preference_successfully(
+    async def test_creates_preference_successfully(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """A valid request returns 201 with preference_id + init_point."""
         httpx_mock.add_response(
@@ -46,7 +47,7 @@ class TestCreatePreference:
         )
 
         order_id = str(uuid.uuid4())
-        response = client.post(
+        response = await async_client.post(
             "/payments/preferences",
             json={"order_id": order_id, "items": _VALID_ITEMS},
             headers={"Idempotency-Key": str(uuid.uuid4())},
@@ -66,11 +67,11 @@ class TestCreatePreference:
         assert request_body["back_urls"]["pending"] == f"bazaar://order-polling/{order_id}"
         assert request_body["back_urls"]["failure"] == f"bazaar://order-polling/{order_id}"
 
-    def test_idempotency_returns_cached(
+    async def test_idempotency_returns_cached(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """Same Idempotency-Key returns the cached init_point
         WITHOUT calling MercadoPago again."""
@@ -87,7 +88,7 @@ class TestCreatePreference:
         headers = {"Idempotency-Key": key}
 
         # First call — hits MercadoPago.
-        r1 = client.post(
+        r1 = await async_client.post(
             "/payments/preferences",
             json=payload,
             headers=headers,
@@ -95,7 +96,7 @@ class TestCreatePreference:
         assert r1.status_code == 201
 
         # Second call — same key, should NOT call MercadoPago.
-        r2 = client.post(
+        r2 = await async_client.post(
             "/payments/preferences",
             json=payload,
             headers=headers,
@@ -107,12 +108,12 @@ class TestCreatePreference:
         # Only 1 request should have been made to MercadoPago.
         assert len(httpx_mock.get_requests()) == 1
 
-    def test_missing_idempotency_key_returns_422(
+    async def test_missing_idempotency_key_returns_422(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
     ) -> None:
         """A request without the Idempotency-Key header returns 422."""
-        response = client.post(
+        response = await async_client.post(
             "/payments/preferences",
             json={
                 "order_id": str(uuid.uuid4()),
@@ -122,23 +123,23 @@ class TestCreatePreference:
         )
         assert response.status_code == 422
 
-    def test_invalid_body_returns_422(
+    async def test_invalid_body_returns_422(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
     ) -> None:
         """A malformed request body returns 422."""
-        response = client.post(
+        response = await async_client.post(
             "/payments/preferences",
             json={"invalid": "data"},
             headers={"Idempotency-Key": str(uuid.uuid4())},
         )
         assert response.status_code == 422
 
-    def test_empty_items_returns_502(
+    async def test_empty_items_returns_502(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """An empty items list passes schema validation but MP rejects it."""
         httpx_mock.add_response(
@@ -148,7 +149,7 @@ class TestCreatePreference:
             status_code=400,
         )
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/preferences",
             json={
                 "order_id": str(uuid.uuid4()),
@@ -158,11 +159,11 @@ class TestCreatePreference:
         )
         assert response.status_code == 502
 
-    def test_mp_error_returns_502(
+    async def test_mp_error_returns_502(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """A MercadoPago API failure returns 502 Bad Gateway."""
         httpx_mock.add_response(
@@ -172,7 +173,7 @@ class TestCreatePreference:
             status_code=500,
         )
 
-        response = client.post(
+        response = await async_client.post(
             "/payments/preferences",
             json={
                 "order_id": str(uuid.uuid4()),
@@ -184,11 +185,11 @@ class TestCreatePreference:
         assert response.status_code == 502
         assert "MercadoPago" in response.json()["detail"]
 
-    def test_payment_persisted_in_db(
+    async def test_payment_persisted_in_db(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """After a successful call the payment record exists in PostgreSQL."""
         httpx_mock.add_response(
@@ -200,28 +201,26 @@ class TestCreatePreference:
 
         key = str(uuid.uuid4())
         order_id = str(uuid.uuid4())
-        client.post(
+        await async_client.post(
             "/payments/preferences",
             json={"order_id": order_id, "items": _VALID_ITEMS},
             headers={"Idempotency-Key": key},
         )
 
         # Verify persistence.
-        payment = (
-            db_session.query(Payment)
-            .filter(Payment.idempotency_key == key)
-            .first()
-        )
+        stmt = select(Payment).filter(Payment.idempotency_key == key)
+        result = await db_session.execute(stmt)
+        payment = result.scalars().first()
         assert payment is not None
         assert str(payment.order_id) == order_id
         assert payment.mp_preference_id == "PREF-DB-CHECK"
         assert payment.init_point is not None
 
-    def test_sends_correct_payload_to_mp(
+    async def test_sends_correct_payload_to_mp(
         self,
-        client: TestClient,
+        async_client: AsyncClient,
         httpx_mock: HTTPXMock,
-        db_session: Session,
+        db_session: AsyncSession,
     ) -> None:
         """The items list is sent to MercadoPago exactly as provided."""
         httpx_mock.add_response(
@@ -232,7 +231,7 @@ class TestCreatePreference:
         )
 
         order_id = str(uuid.uuid4())
-        client.post(
+        await async_client.post(
             "/payments/preferences",
             json={"order_id": order_id, "items": _VALID_ITEMS},
             headers={"Idempotency-Key": str(uuid.uuid4())},

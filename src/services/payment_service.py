@@ -10,7 +10,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import httpx
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.exceptions import (
     MercadoPagoError,
@@ -60,7 +60,7 @@ def _map_mp_status(mp_status: str | None) -> PaymentStatus | None:
 
 
 async def create_preference(
-    db: Session,
+    db: AsyncSession,
     *,
     idempotency_key: str,
     order_id: UUID,
@@ -75,7 +75,7 @@ async def create_preference(
     Parameters
     ----------
     db:
-        Active SQLAlchemy session.
+        Active SQLAlchemy async session.
     idempotency_key:
         UUID from the ``Idempotency-Key`` request header.
     order_id:
@@ -94,7 +94,7 @@ async def create_preference(
         If the upstream MercadoPago API call fails.
     """
     # ── Idempotency check ────────────────────────────
-    existing = repo.get_by_idempotency_key(db, idempotency_key)
+    existing = await repo.get_by_idempotency_key(db, idempotency_key)
     if existing and existing.init_point:
         logger.info(
             "Idempotency hit for key=%s — returning cached preference",
@@ -120,7 +120,7 @@ async def create_preference(
     amount = _compute_total(items)
 
     # ── Persist payment in PENDING status ────────────
-    payment = repo.create_payment(
+    payment = await repo.create_payment(
         db,
         order_id=order_id,
         idempotency_key=idempotency_key,
@@ -154,7 +154,7 @@ async def create_preference(
         ) from exc
 
     # ── Update payment with preference data ──────────
-    repo.update_with_preference(
+    await repo.update_with_preference(
         db,
         payment,
         mp_preference_id=result.preference_id,
@@ -168,7 +168,7 @@ async def create_preference(
 
 
 async def get_payment_status(
-    db: Session,
+    db: AsyncSession,
     order_id: UUID,
 ) -> PaymentStatusResponse:
     """Look up the current payment status for an order.
@@ -178,7 +178,7 @@ async def get_payment_status(
     PaymentNotFoundError
         If no payment record exists for the given order.
     """
-    payment = repo.get_by_order_id(db, order_id)
+    payment = await repo.get_by_order_id(db, order_id)
     if payment is None:
         raise PaymentNotFoundError(
             f"No payment found for order {order_id}"
@@ -189,9 +189,8 @@ async def get_payment_status(
     )
 
 
-
 async def process_webhook(
-    db: Session,
+    db: AsyncSession,
     *,
     payload: dict,
     x_signature: str | None = None,
@@ -209,7 +208,6 @@ async def process_webhook(
     """
     # 1. Extract ID from payload (handles both payment and merchant_order types)
     data_id = payload.get("data", {}).get("id")
-    # webhook_type = payload.get("type") or payload.get("topic")
     
     if not data_id:
         logger.warning(
@@ -259,8 +257,6 @@ async def process_webhook(
             )
 
     # 3. Fetch payment info from MP
-    # The ID could be a payment_id (for 'payment' webhooks) or merchant_order_id (for 'merchant_order' webhooks)
-    # Mercado Pago's webhook format uses the same ID field for both types, but represents different things
     try:
         mp_payment = await mp_client.get_payment_info(data_id)
     except httpx.HTTPStatusError as exc:
@@ -285,7 +281,7 @@ async def process_webhook(
         return
 
     # 4. Update local DB
-    payment = repo.get_by_order_id(db, order_id)
+    payment = await repo.get_by_order_id(db, order_id)
     if not payment:
         logger.warning("No payment found for order_id=%s", order_id)
         return
@@ -300,14 +296,13 @@ async def process_webhook(
         return
 
     if "partially_refunded" in str(payload.get("status_detail", "")).lower():
-        _confirm_refunded_items(db, payment)
-        
+        await _confirm_refunded_items(db, payment)
 
     if payment.status != new_status:
         payment.status = new_status
         payment.mp_payment_id = str(data_id)
 
-        event = outbox_repository.insert(
+        event = await outbox_repository.insert(
             db,
             event_type="NOTIFY_PAYMENT_RESULT",
             payload={
@@ -317,7 +312,7 @@ async def process_webhook(
             },
         )
 
-        repo.update_status(
+        await repo.update_status(
             db,
             payment,
             status=new_status,
@@ -328,7 +323,7 @@ async def process_webhook(
 
 
 async def _confirm_refunded_items(
-    db: Session,
+    db: AsyncSession,
     payment: Payment
 ) -> None:
     """Mark items as refunded in the DB and propagate to orders service
@@ -353,7 +348,7 @@ async def _confirm_refunded_items(
             
             order_item_id = item.get("line_item_id")
             if order_item_id:
-                event = outbox_repository.insert(
+                event = await outbox_repository.insert(
                     db,
                     event_type="NOTIFY_REFUND_RESULT",
                     payload={
@@ -362,19 +357,18 @@ async def _confirm_refunded_items(
                         "refund_status": "approved",
                     },
                 )
-                db.commit()
+                await db.commit()
                 await process_outbox_event_inline(db, event)
-            
 
 
 async def process_debug_webhook(
-    db: Session,
+    db: AsyncSession,
     *,
     operation_id: UUID,
     accepted: bool,
 ) -> None:
     """Process a manual/debug webhook to simulate a payment resolution."""
-    payment = repo.get_by_order_id(db, operation_id)
+    payment = await repo.get_by_order_id(db, operation_id)
     if not payment:
         logger.warning("No payment found for operation_id=%s", operation_id)
         raise PaymentNotFoundError(f"No payment found for order {operation_id}")
@@ -386,7 +380,7 @@ async def process_debug_webhook(
         payment.status = new_status
         payment.mp_payment_id = transaction_id
 
-        event = outbox_repository.insert(
+        event = await outbox_repository.insert(
             db,
             event_type="NOTIFY_PAYMENT_RESULT",
             payload={
@@ -396,7 +390,7 @@ async def process_debug_webhook(
             },
         )
 
-        repo.update_status(
+        await repo.update_status(
             db,
             payment,
             status=new_status,
@@ -407,7 +401,7 @@ async def process_debug_webhook(
 
 
 async def request_refund(
-    db: Session,
+    db: AsyncSession,
     *,
     order_id: UUID,
     order_item_id: str,
@@ -417,7 +411,7 @@ async def request_refund(
     Parameters
     ----------
     db:
-        Active SQLAlchemy session.
+        Active SQLAlchemy async session.
     order_id:
         Order UUID whose payment will be partially refunded.
     order_item_id:
@@ -443,7 +437,7 @@ async def request_refund(
         If the MercadoPago API call fails.
     """
     # 1. Find the payment
-    payment = repo.get_by_order_id(db, order_id)
+    payment = await repo.get_by_order_id(db, order_id)
     if not payment:
         logger.warning("No payment found for order_id=%s", order_id)
         raise PaymentNotFoundError(f"No payment found for order {order_id}")
@@ -519,12 +513,12 @@ async def request_refund(
         ) from exc
 
     # 8. Mark the item as refunded in the DB
-    payment = repo.mark_item_as_refunded(db, payment, order_item_id, refund_data.get("id", None))
+    payment = await repo.mark_item_as_refunded(db, payment, order_item_id, refund_data.get("id", None))
 
     # 9. If all items are now refunded, mark the full payment as REFUNDED
     all_refunded = all(item.get("refunded") is True for item in (payment.items or []))
     if all_refunded:
-        repo.update_status(
+        await repo.update_status(
             db,
             payment,
             status=PaymentStatus.REFUNDED,
@@ -552,7 +546,7 @@ async def request_refund(
 
 
 async def cancel_payment(
-    db: Session,
+    db: AsyncSession,
     *,
     order_id: UUID,
 ) -> dict:
@@ -561,7 +555,7 @@ async def cancel_payment(
     Parameters
     ----------
     db:
-        Active SQLAlchemy session.
+        Active SQLAlchemy async session.
     order_id:
         Order UUID whose payment will be canceled. Only payments in PENDING status can be canceled.
     Returns
@@ -578,7 +572,7 @@ async def cancel_payment(
         If the MercadoPago API call fails during cancellation.
     """
     # 1. Find the payment
-    payment = repo.get_by_order_id(db, order_id)
+    payment = await repo.get_by_order_id(db, order_id)
     if not payment:
         logger.warning("No payment found for order_id=%s", order_id)
         raise PaymentNotFoundError(f"No payment found for order {order_id}")
@@ -596,7 +590,7 @@ async def cancel_payment(
         )
     
     # 3. Update payment status to CANCELED
-    repo.update_status(
+    await repo.update_status(
         db,
         payment,
         status=PaymentStatus.CANCELED,

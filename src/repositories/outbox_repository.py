@@ -4,7 +4,8 @@ Data-access layer for the ``outbox_events`` table.
 
 import logging
 from uuid import UUID
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.outbox_event import OutboxEvent
 from src.core.utils import utc_now
@@ -12,7 +13,7 @@ from src.core.utils import utc_now
 logger = logging.getLogger(__name__)
 
 
-def insert(session: Session, event_type: str, payload: dict) -> OutboxEvent:
+async def insert(session: AsyncSession, event_type: str, payload: dict) -> OutboxEvent:
     """Insert a new OutboxEvent in PENDING status.
     
     This function MUST NOT call commit.
@@ -32,20 +33,21 @@ def insert(session: Session, event_type: str, payload: dict) -> OutboxEvent:
     return event
 
 
-def claim_batch(session: Session, batch_size: int) -> list[OutboxEvent]:
+async def claim_batch(session: AsyncSession, batch_size: int) -> list[OutboxEvent]:
     """Atomically claim up to batch_size PENDING events using FOR UPDATE SKIP LOCKED.
     
     Sets status = 'PROCESSING' and locked_at = now() on claimed rows,
     then commits the transaction immediately.
     """
-    events = (
-        session.query(OutboxEvent)
+    stmt = (
+        select(OutboxEvent)
         .filter(OutboxEvent.status == "PENDING")
         .order_by(OutboxEvent.created_at.asc())
         .limit(batch_size)
         .with_for_update(skip_locked=True)
-        .all()
     )
+    result = await session.execute(stmt)
+    events = list(result.scalars().all())
     
     if not events:
         return []
@@ -55,24 +57,28 @@ def claim_batch(session: Session, batch_size: int) -> list[OutboxEvent]:
         event.status = "PROCESSING"
         event.locked_at = now
         
-    session.commit()
+    await session.commit()
     logger.info("Claimed batch of %d outbox events", len(events))
     return events
 
 
-def mark_done(session: Session, event_id: UUID) -> None:
+async def mark_done(session: AsyncSession, event_id: UUID) -> None:
     """Set the event status to DONE and processed_at to now, then commits."""
-    event = session.query(OutboxEvent).filter(OutboxEvent.id == event_id).first()
+    stmt = select(OutboxEvent).filter(OutboxEvent.id == event_id)
+    result = await session.execute(stmt)
+    event = result.scalar_one_or_none()
     if event:
         event.status = "DONE"
         event.processed_at = utc_now()
-        session.commit()
+        await session.commit()
         logger.info("Marked outbox event %s as DONE", event_id)
 
 
-def mark_failed(session: Session, event_id: UUID, max_attempts: int) -> None:
+async def mark_failed(session: AsyncSession, event_id: UUID, max_attempts: int) -> None:
     """Increment attempts. If attempts < max_attempts resets to PENDING, else sets status to FAILED."""
-    event = session.query(OutboxEvent).filter(OutboxEvent.id == event_id).first()
+    stmt = select(OutboxEvent).filter(OutboxEvent.id == event_id)
+    result = await session.execute(stmt)
+    event = result.scalar_one_or_none()
     if event:
         event.attempts += 1
         if event.attempts < max_attempts:
@@ -92,4 +98,4 @@ def mark_failed(session: Session, event_id: UUID, max_attempts: int) -> None:
                 event_id,
                 event.attempts,
             )
-        session.commit()
+        await session.commit()
