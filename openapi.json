@@ -117,7 +117,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "502": {
             "content": {
@@ -389,7 +389,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "502": {
             "content": {
@@ -400,6 +400,50 @@
               }
             },
             "description": "Bad Gateway"
+          }
+        }
+      }
+    },
+    "/payments/{order_id}/cancel": {
+      "put": {
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Cancela un pago pendiente.",
+        "description": "Permite cancelar un pago que a\u00fan no ha sido aprobado. Si el pago ya fue aprobado, devuelve un error.",
+        "operationId": "cancel_payment_payments__order_id__cancel_put",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderCancellationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
         }
       }
@@ -490,6 +534,28 @@
         ],
         "title": "Item",
         "description": "A single item within a preference request."
+      },
+      "OrderCancellationResponse": {
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Id",
+            "description": "ID de la orden cancelada."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Estado del pago despu\u00e9s de la cancelaci\u00f3n."
+          }
+        },
+        "type": "object",
+        "required": [
+          "order_id",
+          "status"
+        ],
+        "title": "OrderCancellationResponse",
+        "description": "Response for a successful order cancellation."
       },
       "PaymentStatusResponse": {
         "properties": {
