@@ -9,7 +9,7 @@ from src.core.config import get_settings
 from src.models.outbox_event import OutboxEvent
 from src.models.payment import Payment, PaymentStatus
 from src.repositories import outbox_repository
-from src.services.outbox_worker import run_outbox_worker
+from src.services.outbox_worker import run_outbox_worker, process_outbox_event_inline
 from tests.test_webhook import _generate_valid_signature, _create_test_payment
 
 
@@ -199,3 +199,95 @@ async def test_webhook_payment_writes_outbox_event(async_client: AsyncClient, db
         "status": "APPROVED",
         "transaction_id": data_id,
     }
+
+
+async def test_process_outbox_event_inline(db_session: AsyncSession, httpx_mock: HTTPXMock) -> None:
+    # Added for coverage — process_outbox_event_inline
+    settings = get_settings()
+    order_id = str(uuid.uuid4())
+    payload = {"order_id": order_id, "status": "APPROVED", "transaction_id": "tx-123"}
+    
+    event = await outbox_repository.insert(db_session, "NOTIFY_PAYMENT_RESULT", payload)
+    await db_session.commit()
+    
+    httpx_mock.add_response(
+        url=f"{settings.ORDERS_SERVICE_URL}/orders/{order_id}/payment-webhook",
+        method="POST",
+        json={"status": "ok"},
+        status_code=200,
+    )
+    
+    await process_outbox_event_inline(db_session, event)
+    
+    await db_session.refresh(event)
+    assert event.status == "DONE"
+    assert event.processed_at is not None
+
+
+async def test_worker_refund_result_success(db_session: AsyncSession, httpx_mock: HTTPXMock) -> None:
+    # Added for coverage — dispatch_event (NOTIFY_REFUND_RESULT branch)
+    settings = get_settings()
+    order_id = str(uuid.uuid4())
+    payload = {"order_id": order_id, "order_item_id": "item-1", "refund_status": "approved"}
+    
+    event = await outbox_repository.insert(db_session, "NOTIFY_REFUND_RESULT", payload)
+    await db_session.commit()
+    
+    httpx_mock.add_response(
+        url=f"{settings.ORDERS_SERVICE_URL}/orders/{order_id}/refund-webhook",
+        method="POST",
+        json={"status": "ok"},
+        status_code=200,
+    )
+    
+    await run_outbox_worker(limit_iterations=1)
+    
+    await db_session.refresh(event)
+    assert event.status == "DONE"
+
+
+async def test_worker_refund_result_failure(db_session: AsyncSession, httpx_mock: HTTPXMock) -> None:
+    # Added for coverage — dispatch_event (NOTIFY_REFUND_RESULT failure branch)
+    settings = get_settings()
+    order_id = str(uuid.uuid4())
+    payload = {"order_id": order_id, "order_item_id": "item-1", "refund_status": "approved"}
+    
+    event = await outbox_repository.insert(db_session, "NOTIFY_REFUND_RESULT", payload)
+    await db_session.commit()
+    
+    # Mock refund webhook returning 500 error
+    for _ in range(3):
+        httpx_mock.add_response(
+            url=f"{settings.ORDERS_SERVICE_URL}/orders/{order_id}/refund-webhook",
+            method="POST",
+            status_code=500,
+        )
+    
+    import unittest.mock
+    with unittest.mock.patch("asyncio.sleep", return_value=None):
+        await run_outbox_worker(limit_iterations=1)
+    
+    await db_session.refresh(event)
+    assert event.status == "PENDING"
+    assert event.attempts == 1
+
+
+async def test_worker_unknown_event_type(db_session: AsyncSession) -> None:
+    # Added for coverage — dispatch_event (unknown event type branch)
+    event = await outbox_repository.insert(db_session, "UNKNOWN_EVENT_TYPE", {})
+    await db_session.commit()
+    
+    await run_outbox_worker(limit_iterations=1)
+    
+    await db_session.refresh(event)
+    assert event.status == "PENDING"
+    assert event.attempts == 1
+
+
+async def test_worker_unexpected_exception_in_loop(db_session: AsyncSession) -> None:
+    # Added for coverage — run_outbox_worker (exception in loop branch)
+    import unittest.mock
+    with unittest.mock.patch("src.services.outbox_worker._claim_batch_ids", side_effect=Exception("DB Error")):
+        # Should not crash the runner and exit cleanly since limit_iterations=1
+        await run_outbox_worker(limit_iterations=1)
+

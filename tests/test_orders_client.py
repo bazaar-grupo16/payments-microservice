@@ -7,7 +7,7 @@ All outbound HTTP calls are mocked with ``pytest-httpx``.
 import pytest
 from pytest_httpx import HTTPXMock
 
-from src.services.orders_client import notify_payment_result
+from src.services.orders_client import notify_payment_result, notify_refund_result
 
 
 class TestNotifyPaymentResult:
@@ -74,3 +74,67 @@ class TestNotifyPaymentResult:
 
         assert result is False
         assert len(httpx_mock.get_requests()) == 3
+
+
+class TestNotifyRefundResult:
+    """Tests for ``notify_refund_result``."""
+
+    @pytest.mark.asyncio
+    async def test_refund_successful_notification(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        # Added for coverage — notify_refund_result
+        httpx_mock.add_response(
+            url="http://orders-service:8000/orders/order-123/refund-webhook",
+            method="POST",
+            json={"status": "ok"},
+            status_code=200,
+        )
+
+        result = await notify_refund_result("order-123", "item-123", "approved")
+
+        assert result is True
+
+        request = httpx_mock.get_request()
+        body = __import__("json").loads(request.content)
+        assert body == {"order_item_id": "item-123", "refund_status": "approved"}
+
+    @pytest.mark.asyncio
+    async def test_refund_retries_on_transient_error(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        # Added for coverage — notify_refund_result
+        httpx_mock.add_response(
+            url="http://orders-service:8000/orders/order-456/refund-webhook",
+            method="POST",
+            status_code=503,
+        )
+        httpx_mock.add_response(
+            url="http://orders-service:8000/orders/order-456/refund-webhook",
+            method="POST",
+            json={"status": "ok"},
+            status_code=200,
+        )
+
+        result = await notify_refund_result("order-456", "item-456", "rejected")
+
+        assert result is True
+        assert len(httpx_mock.get_requests()) == 2
+
+    @pytest.mark.asyncio
+    async def test_refund_returns_false_after_max_retries(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        # Added for coverage — notify_refund_result
+        for _ in range(3):
+            httpx_mock.add_response(
+                url="http://orders-service:8000/orders/order-789/refund-webhook",
+                method="POST",
+                status_code=500,
+            )
+
+        result = await notify_refund_result("order-789", "item-789", "approved")
+
+        assert result is False
+        assert len(httpx_mock.get_requests()) == 3
+
